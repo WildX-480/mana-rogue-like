@@ -52,6 +52,8 @@ const BANK_STORAGE_KEY = 'mana-hollow-sanctum-bank';
 const RUN_STORAGE_KEY = 'mana-hollow-sanctum-run';
 const assetRoot = 'assets/tmw/clientdata/graphics';
 const soundRoot = 'assets/tmw/clientdata/sfx';
+// Paths prefixed with 'som:' load from the Source of Mana sound set instead.
+const somSoundRoot = 'assets/som/sounds';
 const soundPools = new Map();
 const gameMusic = {
   enabled: true,
@@ -260,8 +262,9 @@ function playSound(path, volume = 0.4) {
   volume *= audioSettings.sfxVolume;
   let pool = soundPools.get(path);
   if (!pool) {
+    const url = path.startsWith('som:') ? `${somSoundRoot}/${path.slice(4)}` : `${soundRoot}/${path}`;
     pool = Array.from({ length: 4 }, () => {
-      const audio = new Audio(`${soundRoot}/${path}`);
+      const audio = new Audio(url);
       audio.preload = 'auto';
       return audio;
     });
@@ -271,6 +274,44 @@ function playSound(path, volume = 0.4) {
   audio.currentTime = 0;
   audio.volume = volume;
   audio.play().catch(() => {});
+}
+
+// Source of Mana mobs that match a Hollow Sanctum enemy, with the cues SoM ships for each.
+const somMobEvents = {
+  ratto: ['attack', 'hit', 'death'],
+  bat: ['attack', 'death'],
+  slime: ['attack', 'hit', 'death'],
+  snake: ['attack'],
+  scorpion: ['attack', 'hit'],
+  croc: ['attack', 'dodge', 'hit'],
+  fluffy: ['attack', 'dodge', 'hit'],
+  skeleton: ['death'],
+  shroom: ['attack', 'hit', 'death'],
+  pinkie: ['attack', 'dodge'],
+  piou: ['attack', 'dodge', 'hit', 'death'],
+  turtle: ['attack', 'dodge', 'hit', 'death'],
+};
+const somMobByEnemy = {
+  ratto: 'ratto', bat: 'bat', vampirebat: 'bat', slime: 'slime',
+  snake: 'snake', scorpion: 'scorpion', croc: 'croc', fluffy: 'fluffy', skeleton: 'skeleton',
+  'spore-sower': 'shroom', bosspinkie: 'pinkie', junglefowl: 'piou', snail: 'turtle',
+};
+// As in SoM, any mob without its own hit or dodge cue uses the shared one.
+const somSharedEnemySounds = { hit: 'som:alteration/hit.ogg', dodge: 'som:alteration/dodge.ogg' };
+
+function somEnemySound(enemy, event) {
+  const mob = somMobByEnemy[enemy.kind];
+  if (mob && somMobEvents[mob].includes(event)) return `som:entities/${mob}/${event}.ogg`;
+  return somSharedEnemySounds[event] || null;
+}
+
+// Pickups can arrive in clusters, so each cue has a minimum gap between plays.
+const pickupSoundTimes = new Map();
+function playPickupSound(name, volume, minGapMs = 70) {
+  const now = performance.now();
+  if (now - (pickupSoundTimes.get(name) || 0) < minGapMs) return;
+  pickupSoundTimes.set(name, now);
+  playSound(`som:alteration/${name}.ogg`, volume);
 }
 
 function scheduleMusicNote(midiNote, startTime, duration, volume, waveform) {
@@ -2940,6 +2981,7 @@ function grantUpgrade(item, source = 'descent') {
   ownedItems.add(item.id);
   recordItemDiscovery(item);
   reservedUpgradeIds.delete(item.id);
+  playSound('som:alteration/skillup.ogg', 0.35);
   updateHud();
   showMessage(
     item.kind === 'clothing'
@@ -3405,6 +3447,7 @@ function tryUnlock(room, direction) {
     return false;
   }
   keysHeld -= 1;
+  playSound('som:entities/chest/open.ogg', 0.35);
   delete room.lockedDoors[direction];
   const target = rooms.find((candidate) =>
     candidate.x === room.x + directions.find((item) => item.name === direction).dx &&
@@ -4036,7 +4079,10 @@ function addParticles(x, y, color, count = 4, speed = 80) {
 }
 
 function playEnemyAttackSound(enemy, volume = enemy.boss ? 0.3 : 0.14) {
-  if (enemy.boss) {
+  const somAttack = somEnemySound(enemy, 'attack');
+  if (somAttack) {
+    playSound(somAttack, volume);
+  } else if (enemy.boss) {
     playSound(enemy.kind === 'jacko' ? 'monsters/pumpkin/hit1.ogg' : 'ML/Roar.ogg', volume);
   } else {
     playSound('monsters/zombie/zombiemiss.ogg', volume);
@@ -5239,19 +5285,12 @@ function spawnEnemyOffspring(enemy) {
   }
 }
 
-// Species with their own TMW death sound; everything else uses the zombie cry.
+// Species with a TMW death sound and no Source of Mana equivalent (see somEnemySound); everything else uses the zombie cry.
 const enemyDeathSounds = {
-  ratto: 'monsters/ratto/die1.ogg',
-  bat: 'monsters/bat/bat-dying1.ogg',
-  vampirebat: 'monsters/bat/bat-dying1.ogg',
   bee: 'monsters/bee/bee-die1.ogg',
   wisp: 'monsters/ghost/ghost-die1.ogg',
-  skeleton: 'monsters/skeleton/skel-die1.ogg',
-  slime: 'monsters/slime/slime-die1.ogg',
-  snail: 'monsters/snail/snail-die1.ogg',
   spider: 'monsters/spider/spider-die1.ogg',
   yeti: 'monsters/yeti/yeti-die1.ogg',
-  'spore-sower': 'monsters/mushroom/die1.ogg',
   jacko: 'monsters/pumpkin/die1.ogg',
   'slime-mother': 'monsters/slime-super/slime-super-die1.ogg',
   reaper: 'monsters/reaper/reaper-die1.ogg',
@@ -5284,6 +5323,12 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
   if (!ignoreFirstHitCap && enemy.hp === enemy.maxHp && enemy.maxHp > 1) damage = Math.min(damage, enemy.hp - 1);
   enemy.hp -= damage;
   enemy.hitFlash = 0.16;
+  const hitSound = enemy.hp > 0 && damage > 0 && !(enemy.hitSoundUntil > performance.now())
+    ? somEnemySound(enemy, 'hit') : null;
+  if (hitSound) {
+    enemy.hitSoundUntil = performance.now() + 140;
+    playSound(hitSound, enemy.boss ? 0.2 : 0.16);
+  }
   const impactXDirection = enemy.x - impactX;
   const impactYDirection = enemy.y - impactY;
   const fallbackAngle = Math.atan2(player.lookY, player.lookX);
@@ -5329,7 +5374,8 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       addParticles(enemy.x, enemy.y, '#ffe08b', 8, 95);
       playSound('special/fanfare.ogg', 0.12);
     }
-    playSound(enemyDeathSounds[enemy.kind] || 'monsters/zombie/zombiedie.ogg', enemy.boss ? 0.65 : 0.38);
+    playSound(somEnemySound(enemy, 'death') || enemyDeathSounds[enemy.kind] || 'monsters/zombie/zombiedie.ogg',
+      enemy.boss ? 0.65 : 0.38);
     addParticles(enemy.x, enemy.y, enemy.color, enemy.boss ? 36 : 14, enemy.boss ? 190 : 120);
     if (enemy.boss || enemy.miniBoss) triggerCameraShake('bomb');
     dropLoot(enemy.x, enemy.y, enemy.boss);
@@ -5360,7 +5406,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       bossStrikes.length = 0;
       groundHazards.length = 0;
       for (let i = bombs.length - 1; i >= 0; i--) if (bombs[i].owner === 'enemy') bombs.splice(i, 1);
-      playSound('special/fanfare.ogg', 0.45);
+      playSound('som:alteration/quest-done.ogg', 0.5);
       if (!save.arcanist) runStats.unlocked.push('arcanist');
       save.arcanist = true;
       queueChapter('character:arcanist', characterChapters.arcanist);
@@ -5794,7 +5840,7 @@ function gainXp(amount) {
     streakCallout.y = player.y - 70;
     streakCallout.text = `LEVEL ${xpLevel}! ${label}`;
     addParticles(player.x, player.y, '#7ee8ff', 16, 140);
-    playSound('special/fanfare.ogg', 0.1);
+    playSound('som:alteration/levelup.ogg', 0.3);
   }
   updateHud();
 }
@@ -6127,6 +6173,7 @@ function applyMobTactics(enemy, dt, directionX, directionY, distance) {
       enemy.dodgeX = (-shot.vy / shotSpeed) * sign;
       enemy.dodgeY = (shot.vx / shotSpeed) * sign;
       enemy.dodgeTimer = 0.16;
+      playSound(somEnemySound(enemy, 'dodge'), 0.14);
       addParticles(enemy.x, enemy.y, '#ffffff', 3, 40);
       return true;
     }
@@ -7047,7 +7094,10 @@ function update(dt) {
       continue;
     }
     if (pickup.kind === 'heart' && player.hp >= player.maxHp) continue;
-    if (pickup.kind === 'xp') gainXp(1);
+    if (pickup.kind === 'xp') {
+      playPickupSound('exp', 0.12, 90);
+      gainXp(1);
+    }
     if (pickup.kind === 'upgrade') {
       // A refused upgrade stays on the floor; it is offered again once the player steps off it.
       if (pickup.refused) continue;
@@ -7060,9 +7110,11 @@ function update(dt) {
     if (pickup.kind === 'coin') {
       coins += 1;
       runStats.zennyFound += 1;
+      playPickupSound('gp', 0.25);
     }
     if (pickup.kind === 'heart') {
       player.hp = Math.min(player.maxHp, player.hp + 1);
+      playPickupSound('heal', 0.35);
       popOverPlayer({ icon: 'heart', color: '#ff7b8e' });
     }
     if (pickup.kind === 'key') {
@@ -7116,6 +7168,7 @@ function update(dt) {
       showMessage('The guardian is defeated. The seal opens; the descent continues.', 5);
     } else {
       popOverPlayer({ icon: 'unlock', color: '#8fe39a' });
+      playSound('som:alteration/quest-update.ogg', 0.3);
     }
   }
   updateHud();
