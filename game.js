@@ -1,5 +1,7 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+// Pixel-art sprites are drawn enlarged; nearest-neighbour keeps them sharp.
+ctx.imageSmoothingEnabled = false;
 
 // Auto quality: when frames run slow, glow (shadowBlur) is switched off and particles are capped.
 const quality = { low: false, avgMs: 16.7, slowFor: 0, fastFor: 0 };
@@ -810,6 +812,10 @@ let score = 0;
 let killStreak = 0;
 let killStreakTimer = 0;
 const streakCallout = { timer: 0, duration: 1.2, x: 0, y: 0, text: '' };
+// Counts down the slow-motion beat between the killing blow and the game-over screen.
+let deathTimer = 0;
+// Recent messages drawn on the canvas, newest first.
+const messageToasts = [];
 let coins = 0;
 let keysHeld = 0;
 let bombsHeld = 3;
@@ -827,6 +833,7 @@ let frostNovaCooldown = 0;
 let frostActive = false;
 const cameraShakeProfiles = {
   bomb: { duration: 0.2, intensity: 4, frequency: 44, style: 'snap' },
+  playerHit: { duration: 0.16, intensity: 3.5, frequency: 40, style: 'snap' },
   playerHeavyHit: { duration: 0.24, intensity: 8, frequency: 34, style: 'snap' },
   jackoJumpLand: { duration: 0.3, intensity: 12, frequency: 30, style: 'heavy' },
   groundPound: { duration: 0.68, intensity: 24, frequency: 36, style: 'heavy' },
@@ -1823,14 +1830,24 @@ function updateHud() {
     updateControlsHint();
     return;
   }
-  statsEl.textContent =
+  // updateHud runs every frame; only touch the DOM when the text changes.
+  const stats =
     `${currentFloorTheme().name} · ${character.className} • Lead: ${activeCombatStyle} | Zenny: ${coins} | Bank: ${save.bankedZenny}`;
+  if (statsEl.textContent !== stats) statsEl.textContent = stats;
   updateControlsHint();
 }
+
+const MAX_MESSAGE_TOASTS = 3;
 
 function showMessage(text, seconds = 2.5) {
   messageEl.textContent = text;
   messageTimer = seconds;
+  // During play, notices also stack on the canvas so they are seen and don't overwrite each other.
+  if (mode !== 'playing' || seconds > 60) return;
+  const existing = messageToasts.findIndex((toast) => toast.text === text);
+  if (existing >= 0) messageToasts.splice(existing, 1);
+  messageToasts.unshift({ text, timer: clamp(seconds, 1.5, 4) });
+  messageToasts.length = Math.min(messageToasts.length, MAX_MESSAGE_TOASTS);
 }
 
 function recordStory(title, text) {
@@ -2142,7 +2159,7 @@ function serializeRun() {
 }
 
 function saveRunState() {
-  if (!character || !currentRoom || !['playing', 'paused'].includes(mode)) return;
+  if (!character || !currentRoom || deathTimer > 0 || !['playing', 'paused'].includes(mode)) return;
   try {
     localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(serializeRun()));
   } catch (error) {
@@ -2254,6 +2271,9 @@ function restoreRun() {
   consumables.push(...(saved.consumables || []));
   companions.length = 0;
   canvas.style.cursor = 'crosshair';
+  deathTimer = 0;
+  messageToasts.length = 0;
+  player.knockback = null;
   mode = 'playing';
   showMap = false;
   showStoryJournal = false;
@@ -2277,7 +2297,7 @@ function clearSavedRun() {
 }
 
 function pauseGame() {
-  if (mode !== 'playing') return;
+  if (mode !== 'playing' || deathTimer > 0) return;
   for (const key of Object.keys(keys)) keys[key] = false;
   pointer.down = false;
   saveRunState();
@@ -3261,7 +3281,10 @@ function beginRun() {
   player.attackPulse = 0;
   player.attackAnimationTimer = 0;
   player.attackAnimationStyle = 'hand';
+  player.knockback = null;
   hitStopTimer = 0;
+  deathTimer = 0;
+  messageToasts.length = 0;
   killStreak = 0;
   killStreakTimer = 0;
   streakCallout.timer = 0;
@@ -5195,6 +5218,28 @@ function spawnEnemyOffspring(enemy) {
   }
 }
 
+// Species with their own TMW death sound; everything else uses the zombie cry.
+const enemyDeathSounds = {
+  ratto: 'monsters/ratto/die1.ogg',
+  bat: 'monsters/bat/bat-dying1.ogg',
+  vampirebat: 'monsters/bat/bat-dying1.ogg',
+  bee: 'monsters/bee/bee-die1.ogg',
+  wisp: 'monsters/ghost/ghost-die1.ogg',
+  skeleton: 'monsters/skeleton/skel-die1.ogg',
+  slime: 'monsters/slime/slime-die1.ogg',
+  snail: 'monsters/snail/snail-die1.ogg',
+  spider: 'monsters/spider/spider-die1.ogg',
+  yeti: 'monsters/yeti/yeti-die1.ogg',
+  'spore-sower': 'monsters/mushroom/die1.ogg',
+  jacko: 'monsters/pumpkin/die1.ogg',
+  'slime-mother': 'monsters/slime-super/slime-super-die1.ogg',
+  reaper: 'monsters/reaper/reaper-die1.ogg',
+  golem: 'monsters/golem/die.ogg',
+  yetiking: 'monsters/yeti/yeti-die1.ogg',
+  forestdragon: 'monsters/dragon/die.ogg',
+  nightdragon: 'monsters/dragon/die.ogg',
+};
+
 function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, ignoreFirstHitCap = false) {
   if (damage > 0) damage = Math.max(1, Math.round(damage * curioMultiplier('damage')));
   if (enemy.linkId && enemy.linkShieldCharges > 0) {
@@ -5258,8 +5303,9 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       addParticles(enemy.x, enemy.y, '#ffe08b', 8, 95);
       playSound('special/fanfare.ogg', 0.12);
     }
-    playSound(enemy.kind === 'jacko' ? 'monsters/pumpkin/die1.ogg' : 'monsters/zombie/zombiedie.ogg',
-      enemy.boss ? 0.65 : 0.38);
+    playSound(enemyDeathSounds[enemy.kind] || 'monsters/zombie/zombiedie.ogg', enemy.boss ? 0.65 : 0.38);
+    addParticles(enemy.x, enemy.y, enemy.color, enemy.boss ? 36 : 14, enemy.boss ? 190 : 120);
+    if (enemy.boss || enemy.miniBoss) triggerCameraShake('bomb');
     dropLoot(enemy.x, enemy.y, enemy.boss);
     const linkedTwin = enemy.linkId
       ? enemies.find((candidate) => candidate !== enemy && candidate.linkId === enemy.linkId)
@@ -5331,7 +5377,7 @@ function explodeBomb(bomb) {
   triggerCameraShake('bomb');
   playSound('special/nature-thunder.ogg', bomb.owner === 'enemy' ? 0.32 : 0.55);
   const hurtByBlast = (target) => distanceBetween(bomb, target) <= bomb.radius && hasLineOfSight(bomb, target);
-  if (hurtByBlast(player)) damagePlayer(3);
+  if (hurtByBlast(player)) damagePlayer(3, bomb);
   if (bomb.owner !== 'enemy') {
     for (let i = enemies.length - 1; i >= 0; i -= 1) {
       const target = enemies[i];
@@ -5764,7 +5810,7 @@ function updateClassSignature(dt) {
 
 // Key 4: the class's own ability, kept separate from the sword/bow/mana slots.
 function useClassSignature() {
-  if (mode !== 'playing') return;
+  if (mode !== 'playing' || deathTimer > 0) return;
   const sig = classSignature();
   if (!sig?.active) return;
   if (player.signatureCooldown > 0) {
@@ -5899,8 +5945,29 @@ function vibrateController(damageAmount) {
   }
 }
 
-function damagePlayer(damageAmount = 1) {
-  if (player.invuln > 0 || mode !== 'playing') return;
+const DEATH_SLOWDOWN_SECONDS = 1.1;
+
+// Hits without an explicit source are attributed to the closest enemy, if one is near.
+function nearestEnemyWithin(maxDistance) {
+  let nearest = null;
+  for (const enemy of enemies) {
+    if (distanceBetween(player, enemy) > maxDistance) continue;
+    if (!nearest || distanceBetween(player, enemy) < distanceBetween(player, nearest)) nearest = enemy;
+  }
+  return nearest;
+}
+
+function knockPlayerBack(origin) {
+  if (!origin) return;
+  const dx = player.x - origin.x;
+  const dy = player.y - origin.y;
+  const length = Math.hypot(dx, dy) || 1;
+  player.knockback = { vx: (dx / length) * 240, vy: (dy / length) * 240, timer: 0.1 };
+}
+
+function damagePlayer(damageAmount = 1, source = null) {
+  if (player.invuln > 0 || mode !== 'playing' || deathTimer > 0) return;
+  const origin = source || nearestEnemyWithin(220);
   if (ownedItems.has('bonded-aegis') && player.aegisCharges > 0) {
     player.aegisCharges -= 1;
     player.invuln = 0.45;
@@ -5920,12 +5987,20 @@ function damagePlayer(damageAmount = 1) {
     showMessage('Your clothing absorbs the hit.', 1.4);
   }
   if (remainingDamage > 0) player.hp -= remainingDamage;
-  if (incomingDamage > 1) triggerCameraShake('playerHeavyHit');
+  triggerCameraShake(incomingDamage > 1 ? 'playerHeavyHit' : 'playerHit');
+  hitStopTimer = Math.max(hitStopTimer, 0.06);
+  playSound('punch.ogg', 0.32);
+  knockPlayerBack(origin);
   player.invuln = 0.9;
   if (player.hp <= 0) {
-    mode = 'gameover';
+    // The run is lost now; a short slow-motion beat plays before the game-over screen.
+    deathTimer = DEATH_SLOWDOWN_SECONDS;
+    player.invuln = DEATH_SLOWDOWN_SECONDS + 1;
+    player.knockback = null;
+    player.hook = null;
+    dashTimer = 0;
     clearSavedRun();
-    showMessage('The sanctum claims another delver. Choose who descends next.', 5);
+    playSound('system/event-fail.ogg', 0.5);
   }
   updateHud();
 }
@@ -6145,6 +6220,7 @@ function applyBossPressure(enemy, dt, directionX, directionY, distance) {
 const calmBossStates = new Set(['jacko-idle', 'hover', 'crawl', 'patrol']);
 
 function updateEnemy(enemy, dt) {
+  enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
   enemy.freezeTimer = Math.max(0, enemy.freezeTimer || 0);
   enemy.slowTimer = Math.max(0, enemy.slowTimer || 0);
   if (enemy.freezeTimer > 0) {
@@ -6172,7 +6248,6 @@ function updateEnemy(enemy, dt) {
   enemy.attackCooldown -= dt * (enemy.boss || enemy.miniBoss
     ? 1 + Math.max(0, currentFloor - 1) * 0.06 : 1 + Math.max(0, currentFloor - 1) * 0.08) * (enemy.boss ? 1.3 : 1);
   enemy.stateTimer -= dt;
-  enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
   enemy.spitFlash = Math.max(0, enemy.spitFlash - dt);
 
   if (enemy.boss || enemy.miniBoss || enemy.bossAI) {
@@ -6622,6 +6697,16 @@ function update(dt) {
     dt -= stoppedTime;
     if (dt <= 0) return;
   }
+  if (deathTimer > 0 && mode === 'playing') {
+    deathTimer = Math.max(0, deathTimer - dt);
+    if (deathTimer === 0) {
+      mode = 'gameover';
+      showMessage('The sanctum claims another delver. Choose who descends next.', 5);
+      updateHud();
+      return;
+    }
+    dt *= 0.3;
+  }
   elapsed += dt;
   if (cameraShake.remaining > 0) {
     cameraShake.remaining = Math.max(0, cameraShake.remaining - dt);
@@ -6640,6 +6725,10 @@ function update(dt) {
     killStreakTimer = Math.max(0, killStreakTimer - dt);
     if (killStreakTimer === 0) killStreak = 0;
     streakCallout.timer = Math.max(0, streakCallout.timer - dt);
+    for (let index = messageToasts.length - 1; index >= 0; index -= 1) {
+      messageToasts[index].timer -= dt;
+      if (messageToasts[index].timer <= 0) messageToasts.splice(index, 1);
+    }
     autosaveTimer += dt;
     if (autosaveTimer >= 12) {
       autosaveTimer = 0;
@@ -6659,10 +6748,12 @@ function update(dt) {
     if (lightningArcs[index].ttl <= 0) lightningArcs.splice(index, 1);
   }
 
-  const keyboardMoveX = (keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0);
-  const keyboardMoveY = (keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0);
-  const moveX = clamp(keyboardMoveX + gamepadInput.moveX, -1, 1);
-  const moveY = clamp(keyboardMoveY + gamepadInput.moveY, -1, 1);
+  // A fallen delver no longer responds to input.
+  const control = deathTimer > 0 ? 0 : 1;
+  const keyboardMoveX = ((keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0)) * control;
+  const keyboardMoveY = ((keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0)) * control;
+  const moveX = clamp(keyboardMoveX + gamepadInput.moveX * control, -1, 1);
+  const moveY = clamp(keyboardMoveY + gamepadInput.moveY * control, -1, 1);
   const keyboardLength = Math.hypot(keyboardMoveX, keyboardMoveY);
   if (keyboardLength > 0 && !gamepadInput.dpadFacing && !gamepadInput.aimActive &&
       !pointer.down && !gamepadInput.shoot) {
@@ -6686,6 +6777,11 @@ function update(dt) {
     player.windPush.timer -= dt;
     player.x += player.windPush.vx * dt;
     player.y += player.windPush.vy * dt;
+  }
+  if (player.knockback?.timer > 0) {
+    player.knockback.timer -= dt;
+    player.x += player.knockback.vx * dt;
+    player.y += player.knockback.vy * dt;
   }
   if (player.hook) {
     const hooker = enemies.find((candidate) => candidate.kind === player.hook.kind);
@@ -6725,10 +6821,13 @@ function update(dt) {
   playerStillTimer = Math.hypot(playerVelocity.x, playerVelocity.y) < 45 ? playerStillTimer + dt : 0;
   updateBossStrikes(dt);
   resolveDoorCrossing();
-  updateWalkInInteractions(dt);
+  if (control) updateWalkInInteractions(dt);
 
   const attackStyle = currentAttackStyle();
-  if (attackStyle === 'melee') updateMeleeInput(dt);
+  if (!control) {
+    player.meleeCharge = 0;
+    player.bowHold = 0;
+  } else if (attackStyle === 'melee') updateMeleeInput(dt);
   else if (attackStyle === 'bow') {
     player.meleeCharge = 0;
     updateBowInput(dt);
@@ -6769,7 +6868,7 @@ function update(dt) {
     updateEnemy(enemy, dt);
     if (distanceBetween(player, enemy) < enemy.radius + player.radius + 2) {
       if (player.invuln <= 0 && enemy.behavior === 'roll') triggerCameraShake('charge');
-      damagePlayer(contactDamage(enemy));
+      damagePlayer(contactDamage(enemy), enemy);
     }
   }
   updateCompanions(dt);
@@ -6877,7 +6976,7 @@ function update(dt) {
       addParticles(projectile.x, projectile.y, projectile.color, 6, 80);
       enemyProjectiles.splice(i, 1);
     } else if (hitsPlayer) {
-      damagePlayer();
+      damagePlayer(1, projectile);
       enemyProjectiles.splice(i, 1);
     } else if (projectileExpired) {
       enemyProjectiles.splice(i, 1);
@@ -7388,7 +7487,6 @@ function drawEnemy(enemy) {
           (enemy.phase >= 2 ? 0.7 : 0.85) * Math.PI) * (enemy.phase >= 2 ? 86 : 56)
         : enemy.kind === 'wisp' ? Math.sin(elapsed * 5 + enemy.x) * 5 : 0;
     ctx.save();
-    if (enemy.hitFlash > 0) ctx.globalAlpha = 0.55;
     ctx.translate(enemy.x, enemy.y - hop);
     if (enemy.archetype === 'charger' && enemy.behavior === 'roll' ||
       enemy.linkDash && enemy.linkDash.windup <= 0 && enemy.linkDash.kind === 'roll' ||
@@ -7410,6 +7508,8 @@ function drawEnemy(enemy) {
       ctx.shadowBlur = enemy.phase >= 2 ? 30 : 16;
       if (enemy.phase >= 2) ctx.filter = 'saturate(1.5) brightness(1.25)';
     }
+    // A brief bright flash confirms the hit without fading the sprite out.
+    if (enemy.hitFlash > 0) ctx.filter = 'brightness(2.6) saturate(0.3)';
     ctx.drawImage(sprite.image, sourceX, sourceY, sprite.frameWidth, sprite.frameHeight,
       -width / 2, -height / 2, width, height);
     if ((enemy.kind === 'bandit' || enemy.kind === 'banditlord') &&
@@ -7662,11 +7762,13 @@ function drawEnemy(enemy) {
     ctx.stroke();
     ctx.restore();
   }
-  ctx.fillStyle = '#160f13';
-  ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 11, enemy.radius * 2, 5);
-  ctx.fillStyle = enemy.boss ? '#e376bd' : '#9be08d';
-  ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 11,
-    (enemy.hp / enemy.maxHp) * enemy.radius * 2, 5);
+  if (enemy.hp < enemy.maxHp) {
+    ctx.fillStyle = '#160f13';
+    ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 11, enemy.radius * 2, 5);
+    ctx.fillStyle = enemy.boss ? '#e376bd' : '#9be08d';
+    ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 11,
+      (enemy.hp / enemy.maxHp) * enemy.radius * 2, 5);
+  }
   if (enemy.boss || enemy.miniBoss) {
     ctx.fillStyle = '#f5debd';
     ctx.font = 'bold 14px Arial';
@@ -9121,79 +9223,6 @@ function drawWorld() {
     }
     ctx.restore();
   }
-  for (const projectile of enemyProjectiles) {
-    ctx.save();
-    ctx.shadowColor = projectile.color;
-    if (projectile.kind === 'arrow') {
-      ctx.translate(projectile.x, projectile.y);
-      ctx.rotate(Math.atan2(projectile.vy, projectile.vx));
-      ctx.shadowBlur = 8;
-      ctx.strokeStyle = '#704526';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(-12, 0);
-      ctx.lineTo(10, 0);
-      ctx.stroke();
-      ctx.fillStyle = '#d5c18b';
-      ctx.beginPath();
-      ctx.moveTo(13, 0);
-      ctx.lineTo(6, -3.5);
-      ctx.lineTo(6, 3.5);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = '#d5c18b';
-      ctx.beginPath();
-      ctx.moveTo(-9, 0);
-      ctx.lineTo(-14, -4);
-      ctx.moveTo(-9, 0);
-      ctx.lineTo(-14, 4);
-      ctx.stroke();
-    } else if (projectile.kind === 'spore-orb') {
-      const pulse = 1 + Math.sin(elapsed * 14) * 0.12;
-      ctx.shadowBlur = 20;
-      ctx.fillStyle = projectile.color;
-      ctx.beginPath();
-      ctx.arc(projectile.x, projectile.y, projectile.radius * pulse, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 211, 255, 0.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(projectile.x, projectile.y, projectile.radius + 6 + Math.sin(elapsed * 12) * 2, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = '#f5d8fb';
-      for (let seed = 0; seed < 4; seed += 1) {
-        const angle = elapsed * 2 + seed * Math.PI / 2;
-        ctx.beginPath();
-        ctx.arc(projectile.x + Math.cos(angle) * 8, projectile.y + Math.sin(angle) * 8, 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else if (projectile.kind === 'spore-shard') {
-      const angle = Math.atan2(projectile.vy, projectile.vx);
-      ctx.translate(projectile.x, projectile.y);
-      ctx.rotate(angle);
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = projectile.color;
-      ctx.beginPath();
-      ctx.moveTo(8, 0);
-      ctx.lineTo(-4, -3);
-      ctx.lineTo(-8, 0);
-      ctx.lineTo(-4, 3);
-      ctx.closePath();
-      ctx.fill();
-    } else {
-      ctx.shadowBlur = 13;
-      ctx.fillStyle = projectile.color;
-      ctx.beginPath();
-      ctx.arc(projectile.x, projectile.y, projectile.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.beginPath();
-      ctx.arc(projectile.x - projectile.radius * 0.25, projectile.y - projectile.radius * 0.25,
-        projectile.radius * 0.34, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
   for (const particle of particles) {
     ctx.globalAlpha = clamp(particle.ttl / particle.maxTtl, 0, 1);
     ctx.fillStyle = particle.color;
@@ -9273,6 +9302,80 @@ function drawWorld() {
   for (const enemy of enemies) drawEnemy(enemy);
   for (const companion of companions) drawCompanion(companion);
   drawPlayer();
+  // Enemy shots draw above the delver so the sprite never hides an incoming hit.
+  for (const projectile of enemyProjectiles) {
+    ctx.save();
+    ctx.shadowColor = projectile.color;
+    if (projectile.kind === 'arrow') {
+      ctx.translate(projectile.x, projectile.y);
+      ctx.rotate(Math.atan2(projectile.vy, projectile.vx));
+      ctx.shadowBlur = 8;
+      ctx.strokeStyle = '#704526';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(10, 0);
+      ctx.stroke();
+      ctx.fillStyle = '#d5c18b';
+      ctx.beginPath();
+      ctx.moveTo(13, 0);
+      ctx.lineTo(6, -3.5);
+      ctx.lineTo(6, 3.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#d5c18b';
+      ctx.beginPath();
+      ctx.moveTo(-9, 0);
+      ctx.lineTo(-14, -4);
+      ctx.moveTo(-9, 0);
+      ctx.lineTo(-14, 4);
+      ctx.stroke();
+    } else if (projectile.kind === 'spore-orb') {
+      const pulse = 1 + Math.sin(elapsed * 14) * 0.12;
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = projectile.color;
+      ctx.beginPath();
+      ctx.arc(projectile.x, projectile.y, projectile.radius * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(245, 211, 255, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(projectile.x, projectile.y, projectile.radius + 6 + Math.sin(elapsed * 12) * 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#f5d8fb';
+      for (let seed = 0; seed < 4; seed += 1) {
+        const angle = elapsed * 2 + seed * Math.PI / 2;
+        ctx.beginPath();
+        ctx.arc(projectile.x + Math.cos(angle) * 8, projectile.y + Math.sin(angle) * 8, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (projectile.kind === 'spore-shard') {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      ctx.translate(projectile.x, projectile.y);
+      ctx.rotate(angle);
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = projectile.color;
+      ctx.beginPath();
+      ctx.moveTo(8, 0);
+      ctx.lineTo(-4, -3);
+      ctx.lineTo(-8, 0);
+      ctx.lineTo(-4, 3);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.shadowBlur = 13;
+      ctx.fillStyle = projectile.color;
+      ctx.beginPath();
+      ctx.arc(projectile.x, projectile.y, projectile.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.beginPath();
+      ctx.arc(projectile.x - projectile.radius * 0.25, projectile.y - projectile.radius * 0.25,
+        projectile.radius * 0.34, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
   drawOverheadPops();
   drawLaserBeams();
   drawSporePods();
@@ -9457,31 +9560,22 @@ function drawMinimap() {
 // Bottom-left 1/2/3 weapon slots; the active one is enlarged, glowing and tagged.
 // Bottom action bar: every non-weapon button, with its key, live count and cooldown.
 // Mirrors the page's text lines (message + controls hint) into the canvas so they are visible without scrolling.
-let commentaryText = '';
-let commentaryShownAt = 0;
-
 function drawInGameCommentary() {
-  const text = messageEl.textContent || '';
-  const now = performance.now();
-  if (text !== commentaryText) {
-    commentaryText = text;
-    commentaryShownAt = now;
-  }
   const calm = enemies.length === 0;
-  const age = (now - commentaryShownAt) / 1000;
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  if (text && age < 4) {
-    const alpha = Math.min(1, (4 - age) / 0.6);
-    ctx.font = 'bold 14px Arial';
-    const width = Math.min(canvas.width - 40, ctx.measureText(text).width + 28);
-    ctx.globalAlpha = alpha;
+  // Recent messages stack upward from the commentary line, newest at the bottom.
+  ctx.font = 'bold 14px Arial';
+  messageToasts.forEach((toast, index) => {
+    const y = 408 - index * 30;
+    const width = Math.min(canvas.width - 40, ctx.measureText(toast.text).width + 28);
+    ctx.globalAlpha = Math.min(1, toast.timer / 0.6) * (index === 0 ? 1 : 0.85);
     ctx.fillStyle = 'rgba(8, 10, 12, 0.78)';
-    ctx.fillRect(canvas.width / 2 - width / 2, 408, width, 26);
+    ctx.fillRect(canvas.width / 2 - width / 2, y, width, 26);
     ctx.fillStyle = '#f4e8c8';
-    ctx.fillText(text.slice(0, 120), canvas.width / 2, 426, canvas.width - 48);
-  }
+    ctx.fillText(toast.text.slice(0, 120), canvas.width / 2, y + 18, canvas.width - 48);
+  });
   if (calm) {
     const hint = (controlsEl.textContent || '').replace(/\n/g, ' · ');
     ctx.globalAlpha = 0.85;
@@ -9805,6 +9899,8 @@ function drawGameHud() {
     const x = healthX + index * 20;
     if (index < player.hp && heartImage.complete && heartImage.naturalWidth > 0) {
       ctx.save();
+      // The heart icon is drawn smaller than its source, so it keeps smoothing.
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(heartImage, x, leftHud.y + 34, 17, 17);
       ctx.restore();
     } else {
@@ -11210,6 +11306,7 @@ function pollGamepad() {
 }
 
 function runAction(id, options = {}) {
+  if (deathTimer > 0) return;
   if (id === 'interact') {
     interact(Boolean(options.shift));
     return;
@@ -11397,7 +11494,7 @@ canvas.addEventListener('pointermove', updatePointerPosition);
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 let lastWheelSwitch = 0;
 canvas.addEventListener('wheel', (event) => {
-  if (mode !== 'playing') return;
+  if (mode !== 'playing' || deathTimer > 0) return;
   event.preventDefault();
   const now = performance.now();
   if (now - lastWheelSwitch < 180 || event.deltaY === 0) return;
