@@ -135,17 +135,17 @@ function setTextToSpeech(enabled) {
 
 // Returns true when the click was consumed by the audio panel.
 function handleAudioPanelPointerDown(px, py) {
-  if (pointInBounds(px, py, volumeSliderBounds())) {
+  if (pointInBounds(volumeSliderBounds(), px, py)) {
     audioSliderDragging = 'music';
     setVolumeFromPointer(px);
     return true;
   }
-  if (pointInBounds(px, py, sfxSliderBounds())) {
+  if (pointInBounds(sfxSliderBounds(), px, py)) {
     audioSliderDragging = 'sfx';
     setVolumeFromPointer(px);
     return true;
   }
-  if (NARRATION_ENABLED && pointInBounds(px, py, ttsButtonBounds())) {
+  if (NARRATION_ENABLED && pointInBounds(ttsButtonBounds(), px, py)) {
     setTextToSpeech(audioSettings.tts !== true);
     return true;
   }
