@@ -143,7 +143,7 @@ function handleAudioPanelPointerDown(px, py) {
     setVolumeFromPointer(px);
     return true;
   }
-  if (pointInBounds(px, py, ttsButtonBounds())) {
+  if (NARRATION_ENABLED && pointInBounds(px, py, ttsButtonBounds())) {
     setTextToSpeech(audioSettings.tts !== true);
     return true;
   }
@@ -176,7 +176,7 @@ function drawTtsPrompt() {
 }
 
 function ttsPromptActive() {
-  return audioSettings.tts === null && mode === 'prologue';
+  return NARRATION_ENABLED && audioSettings.tts === null && mode === 'prologue';
 }
 
 function drawAudioPanel() {
@@ -199,6 +199,10 @@ function drawAudioPanel() {
     ctx.fillStyle = '#fff0d1';
     ctx.fillRect(bounds.x + bounds.width * value - 4, bounds.y, 8, bounds.height);
   }
+  if (!NARRATION_ENABLED) {
+    ctx.restore();
+    return;
+  }
   const ttsOn = audioSettings.tts === true;
   ctx.fillStyle = ttsOn ? '#30443b' : '#4a2f2f';
   ctx.fillRect(tts.x, tts.y, tts.width, tts.height);
@@ -212,12 +216,18 @@ function drawAudioPanel() {
 
 const musicMelody = [57, 60, 64, 60, 55, 60, 64, 60, 57, 60, 65, 62, 55, 59, 62, 59];
 const musicChords = [[45, 48, 52], [41, 45, 48], [48, 52, 55], [43, 47, 50]];
-const prologueNarrations = [1, 2, 3].map((segment) => {
+// Voice narration is off until the recordings are redone to match the current text.
+const NARRATION_ENABLED = false;
+const prologueNarrations = NARRATION_ENABLED ? [1, 2, 3].map((segment) => {
   const audio = new Audio(`assets/audio/prologue-0${segment}.ogg`);
   audio.preload = 'auto';
   audio.volume = 0.76;
   return audio;
-});
+}) : [];
+// Narration speaks only when it is enabled in code and the player turned read-aloud on.
+function narrationActive() {
+  return NARRATION_ENABLED && audioSettings.tts === true;
+}
 let activePrologueNarration = -1;
 let prologueNarrationNeedsGesture = true;
 let activePrologueSpeech = null;
@@ -353,6 +363,7 @@ function speakWithNarrator(utterance, onReady) {
 }
 
 function startPrologueSpeechFallback(pageIndex) {
+  if (!narrationActive()) return false;
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
   if (prologueSpeechFallbackActive && window.speechSynthesis.speaking) return true;
   window.speechSynthesis.cancel();
@@ -381,7 +392,7 @@ function startPrologueSpeechFallback(pageIndex) {
 }
 
 function startPrologueNarration() {
-  if (mode !== 'prologue' || audioSettings.tts !== true) return false;
+  if (mode !== 'prologue' || !narrationActive()) return false;
   const audio = prologueNarrations[prologuePage];
   if (activePrologueNarration !== prologuePage) stopPrologueNarration();
   activePrologueNarration = prologuePage;
@@ -612,6 +623,16 @@ const bossCompanionKinds = new Set([
   'snowman-boss', 'yetiking', 'forestdragon', 'nightdragon',
 ]);
 const MIN_ABILITY_COST = 3;
+// Proper names for monsters whose sprite keys don't read as one.
+const monsterDisplayNames = {
+  'slime-mother': 'Great Red Slime', bosspinkie: 'Pinkie Matriarch', golem: 'Ancient Golem',
+  banditlord: 'Bandit Lord', yetiking: 'Yeti King', forestdragon: 'Forest Dragon',
+  nightdragon: 'Night Dragon', vampirebat: 'Vampire Bat', junglefowl: 'Jungle Fowl',
+};
+function monsterDisplayName(kind) {
+  return monsterDisplayNames[kind] ||
+    kind.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' ');
+}
 const shopItemCatalog = [
   { id: 'pearl', name: 'Mana Pearl', description: 'Larger, stronger tears', cost: 5, kind: 'passive' },
   { id: 'prism', name: 'Prism Shard', description: 'Fire a three-way burst', cost: 8, kind: 'passive' },
@@ -666,11 +687,11 @@ const shopItemCatalog = [
   { id: 'leather-legguards', name: 'Leather Legguards', description: 'Heavy legs slow you down but absorb two hits', cost: 8, kind: 'clothing', slot: 'legs', sprite: 'leatherLegguards', speedBonus: -18, armorBonus: 2 },
   { id: 'leather-vest', name: 'Leather Vest', description: 'A sturdy vest that absorbs one hit', cost: 7, kind: 'clothing', slot: 'chest', sprite: 'leatherVest', speedBonus: 0, armorBonus: 1 },
   ...Object.keys(monsterSprites).map((kind) => {
-    const name = kind.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' ');
+    const name = monsterDisplayName(kind);
     return {
       id: `${kind}-companion`,
       name: `${name} Familiar`,
-      description: `A ${kind.replaceAll('-', ' ')} fights beside you`,
+      description: `${/^[AEIOU]/.test(name) ? 'An' : 'A'} ${name} fights beside you`,
       cost: bossCompanionKinds.has(kind) ? 14 : 8,
       kind: 'companion',
       companion: kind,
@@ -685,11 +706,11 @@ const characterRoster = [
   { id: 'wanderer', name: 'Mage', className: 'Mage', startingStyle: 'magic', styleLabel: 'Magic tears', hairStyle: 'wanderer', raceHead: 'humanMale', sprite: 'male', color: '#75d8ff', hue: 0, speed: 235, hp: 6, damage: 1, fireDelay: 0.23, trait: 'Balanced delver', unlock: 'Available' },
   { id: 'arcanist', name: 'Warrior', className: 'Warrior', startingStyle: 'melee', styleLabel: 'Hand-to-hand', hairStyle: 'arcanist', raceHead: 'humanFemale', sprite: 'female', color: '#d7a8ff', hue: 95, speed: 210, hp: 8, damage: 2, fireDelay: 0.28, trait: 'Hardy, slower strikes', unlock: 'Defeat a floor guardian' },
   { id: 'warden', name: 'Rogue', className: 'Rogue', startingStyle: 'bow', styleLabel: 'Bow and arrows', hairStyle: 'warden', raceHead: 'humanMale', sprite: 'neutral', color: '#fbd96f', hue: 205, speed: 250, hp: 5, damage: 1, fireDelay: 0.23, trait: 'Fast feet, light armor', unlock: 'Find a secret room' },
-  { id: 'candor-runner', name: 'Candor Runner', className: 'Scout', startingStyle: 'bow', styleLabel: 'Quick arrows', hairStyle: 'candor', raceHead: 'humanFemale', sprite: 'female', color: '#f5b86c', hue: 25, speed: 285, hp: 4, damage: 1, fireDelay: 0.34, trait: 'Very fast, slow draw', unlock: 'Defeat Boss Pinkie' },
-  { id: 'world-edge-pilgrim', name: 'World-Edge Pilgrim', className: 'Pilgrim', startingStyle: 'magic', styleLabel: 'Patient casting', hairStyle: 'pilgrim', raceHead: 'elfMale', sprite: 'elf', color: '#b9d9a0', hue: 35, speed: 210, hp: 8, damage: 1, fireDelay: 0.3, trait: 'Patient casting, slower pace', unlock: 'Find a secret room' },
+  { id: 'candor-runner', name: 'Candor Runner', className: 'Scout', startingStyle: 'bow', styleLabel: 'Quick arrows', hairStyle: 'candor', raceHead: 'humanFemale', sprite: 'female', color: '#f5b86c', hue: 25, speed: 285, hp: 4, damage: 1, fireDelay: 0.34, trait: 'Very fast, slow draw', unlock: 'Defeat the Pinkie Matriarch' },
+  { id: 'world-edge-pilgrim', name: 'World Edge Pilgrim', className: 'Pilgrim', startingStyle: 'magic', styleLabel: 'Patient casting', hairStyle: 'pilgrim', raceHead: 'elfMale', sprite: 'elf', color: '#b9d9a0', hue: 35, speed: 210, hp: 8, damage: 1, fireDelay: 0.3, trait: 'Patient casting, slower pace', unlock: 'Find a secret room' },
   { id: 'hurnscald-herbalist', name: 'Hurnscald Herbalist', className: 'Herbalist', startingStyle: 'magic', styleLabel: 'Frost magic', hairStyle: 'herbalist', raceHead: 'elfFemale', sprite: 'elfFemale', color: '#86d69c', hue: 65, speed: 200, hp: 7, damage: 1, fireDelay: 0.27, startingAbility: 'frost-rune', trait: 'Starts with Frost Rune', unlock: 'Reach Hurnscald' },
   { id: 'mycelia-sporeling', name: 'Hurnscald Sporeling', className: 'Sporeling', startingStyle: 'magic', styleLabel: 'Spore magic', hairStyle: 'herbalist', hat: 'shroomhat', raceHead: 'elfFemale', sprite: 'elfFemale', color: '#d78be7', hue: 300, speed: 205, hp: 6, damage: 1, fireDelay: 0.27, trait: 'Mushroom hat, spore pods', unlock: 'Available' },
-  { id: 'ironbound', name: 'Ironbound', className: 'Sentinel', startingStyle: 'melee', styleLabel: 'Heavy blows', hairStyle: 'ironbound', raceHead: 'orcMale', sprite: 'orc', color: '#c7b8a2', hue: 15, speed: 158, hp: 11, damage: 3, fireDelay: 0.4, startingBombs: 4, trait: 'Strong and slow', unlock: 'Defeat a sentinel' },
+  { id: 'ironbound', name: 'Ironbound', className: 'Sapper', startingStyle: 'melee', styleLabel: 'Heavy blows', hairStyle: 'ironbound', raceHead: 'orcMale', sprite: 'orc', color: '#c7b8a2', hue: 15, speed: 158, hp: 11, damage: 3, fireDelay: 0.4, startingBombs: 4, trait: 'Strong and slow', unlock: 'Defeat a sentinel' },
   { id: 'artis-archivist', name: 'Artis Archivist', className: 'Scholar', startingStyle: 'magic', styleLabel: 'Measured spells', hairStyle: 'archivist', raceHead: 'tritanMale', sprite: 'tritan', color: '#c4a6df', hue: 115, speed: 218, hp: 4, damage: 3, fireDelay: 0.32, trait: 'Heavy hits, fragile', unlock: 'Reach Artis' },
   { id: 'glass-quill', name: 'Glass Quill', className: 'Scribe', startingStyle: 'bow', styleLabel: 'Piercing shots', hairStyle: 'quill', raceHead: 'raijinFemale', sprite: 'raijin', color: '#f0a2a2', hue: 155, speed: 230, hp: 3, damage: 3, fireDelay: 0.36, projectileSpeed: 620, trait: 'High damage, very fragile', unlock: 'Defeat the Spider Queen' },
   { id: 'vault-delver', name: 'Vault Delver', className: 'Delver', startingStyle: 'melee', styleLabel: 'Rapid fists', hairStyle: 'wanderer', raceHead: 'humanMale', sprite: 'neutral', color: '#a9c1d7', hue: 220, speed: 180, hp: 6, damage: 1, fireDelay: 0.16, trait: 'Slow movement, fast attacks', unlock: 'Complete a descent' },
@@ -698,7 +719,7 @@ const characterRoster = [
   { id: 'halinarzo-ranger', name: 'Halinarzo Ranger', className: 'Ranger', startingStyle: 'bow', styleLabel: 'Long shots', hairStyle: 'quill', raceHead: 'elfFemale', sprite: 'elfFemale', color: '#c5d38b', hue: 45, speed: 255, hp: 4, damage: 2, fireDelay: 0.3, projectileSpeed: 580, trait: 'Quick and fragile', unlock: 'Defeat Bandit Lord' },
   { id: 'nivalis-oracle', name: 'Nivalis Oracle', className: 'Oracle', startingStyle: 'magic', styleLabel: 'Ice magic', hairStyle: 'pilgrim', raceHead: 'raijinFemale', sprite: 'raijin', color: '#a9dbed', hue: 185, speed: 195, hp: 7, damage: 1, fireDelay: 0.25, startingAbility: 'frost-rune', trait: 'Frost Rune, slow movement', unlock: 'Defeat Snowman Boss' },
   { id: 'frostia-reclaimer', name: 'Frostia Reclaimer', className: 'Reclaimer', startingStyle: 'melee', styleLabel: 'Heavy fists', hairStyle: 'ironbound', raceHead: 'tritanMale', sprite: 'tritan', color: '#88bdcf', hue: 205, speed: 170, hp: 10, damage: 2, fireDelay: 0.38, trait: 'High health, slow attacks', unlock: 'Defeat Yeti King' },
-  { id: 'fortress-keeper', name: 'Fortress Keeper', className: 'Warden', startingStyle: 'magic', styleLabel: 'Rooted magic', hairStyle: 'herbalist', raceHead: 'elfMale', sprite: 'elf', color: '#99c98a', hue: 80, speed: 205, hp: 6, damage: 2, fireDelay: 0.27, trait: 'Steady, modest speed', unlock: 'Defeat Forest Dragon' },
+  { id: 'fortress-keeper', name: 'Candor Keeper', className: 'Warden', startingStyle: 'magic', styleLabel: 'Rooted magic', hairStyle: 'herbalist', raceHead: 'elfMale', sprite: 'elf', color: '#99c98a', hue: 80, speed: 205, hp: 6, damage: 2, fireDelay: 0.27, trait: 'Steady, modest speed', unlock: 'Defeat Forest Dragon' },
   { id: 'world-edge-veteran', name: 'World Edge Veteran', className: 'Veteran', startingStyle: 'bow', styleLabel: 'Last light', hairStyle: 'archivist', raceHead: 'orcMale', sprite: 'orc', color: '#c0a1d4', hue: 260, speed: 155, hp: 12, damage: 3, fireDelay: 0.42, trait: 'Very tough, very slow', unlock: 'Defeat Night Dragon' },
   { id: 'random', name: 'Random Delver', className: '???', startingStyle: 'melee', styleLabel: 'Roll the dice', hairStyle: 'wanderer', raceHead: 'humanMale', sprite: 'neutral', color: '#ffffff', hue: 300, speed: 200, hp: 6, damage: 1, fireDelay: 0.25, trait: 'Surprise me!', unlock: 'Available', random: true },
 ];
@@ -706,48 +727,48 @@ const rosterPageSize = 5;
 const prologuePages = [
   {
     heading: 'TULIMSHAR',
-    title: 'A seed beneath the city',
-    text: 'Tulimshar is always the first stop. In this side-story, a strange mana seed is recovered from a sealed passage beneath the desert city. Afterward, monsters across the region begin acting out of season. It may be an echo of the distant Mana Tree, but no one yet knows why.',
+    title: 'A Seed Beneath the Sand',
+    text: 'Mana flows through every living thing. Left to stagnate, it decays into Kaore, a blight that turns gentle creatures savage. In the old mines beyond Tulimshar’s walls, a sealed passage has given up a Mana Seed, a kernel of pure Mana. Since it was unearthed, monsters across the desert have stirred out of season. It may be an echo of the distant Mana Tree, but no one yet knows.',
   },
   {
     heading: 'HURNSCALD',
-    title: 'Toward the World Edge',
-    text: 'The trail leads through Hurnscald, whose mayor Rakinorf is known to travelers asking about the World Edge. The forest paths are familiar, but something has unsettled the creatures along them. Your search follows the roads without changing the stories already told there.',
+    title: 'Through the Ancient Woodlands',
+    text: 'In Hurnscald, travelers asking after the World Edge are sent to Mayor Rakinorf, and lately they all bring him the same story. Wherever Kaore has soaked into the land, the creatures grow wilder wherever Mana’s flow runs beneath them. The forest roads are familiar. What walks them is not.',
   },
   {
     heading: 'ARTIS',
-    title: 'A story beside the main road',
-    text: 'Trade brings people and rumors to Artis. Beneath one forgotten route, sealed rooms hold signs of the same disturbance. This is a small side-story in The Mana World: its delvers, discoveries, and battles leave the established towns and histories intact.',
+    title: 'A Route off the Main Road',
+    text: 'Trade brings people and rumors to Artis, and most of both pass straight through. One rumor lingers: beneath a forgotten route off the main road, sealed rooms show signs of the same disturbance. The great histories of these lands will not record what happens down there. This is a smaller tale, told by the delvers who go below.',
   },
 ];
 const regionChapters = {
-  tulimshar: { heading: 'TULIMSHAR', title: 'The Desert Gate', text: 'Tulimshar, where every descent begins. Guards, guilds, and caravans cross its sand, and the mana seed first pulsed on an old road outside the walls. Follow that rhythm, and the desert will show you what it hides.' },
-  hurnscald: { heading: 'HURNSCALD', title: 'Where the Forest Remembers', text: 'Hurnscald. Rakinorf’s town sits among old woodland roads, and the creatures here are restless. The seed’s pulse grows stronger beneath the trees. Whatever stirs them, it is not the forest alone.' },
-  graveyard: { heading: 'THE GRAVEYARD', title: 'The Quiet Stones', text: 'The graveyard beyond Hurnscald is silent until the pulse passes beneath it. The dead are not choosing a new war. They are answering a rhythm they cannot name. Walk softly.' },
-  artis: { heading: 'ARTIS RUINS', title: 'Amelia’s Ruins', text: 'The Artis Ruins. Here Amelia speaks of a Mana Tree in a distant cave, saddened by war. The seed brightens when the Tree is named. A resemblance, perhaps, but not yet proof.' },
-  halinarzo: { heading: 'HALINARZO', title: 'The Savannah Roads', text: 'Halinarzo. Library shelves and savannah trails hold fragments of old passages. A repeating mark in the journal matches the seed’s rhythm. Bandits watch these roads, so keep your guard up.' },
-  nivalis: { heading: 'NIVALIS', title: 'Beneath the Snow', text: 'Nivalis lies under snow. The Blue Sage is said to know the northern trails, and the pulse carries through the ice itself. Cold can hide a signal, but it cannot silence it.' },
-  frostia: { heading: 'FROSTIA', title: 'The Ice Court', text: 'Frostia, where King Gelid’s ice caves amplify the seed’s pulse and draw monsters down the trail. Every footstep echoes here. Move with purpose.' },
-  fortress: { heading: 'FORTRESS ISLAND', title: 'The Island of War', text: 'Fortress Island. Amelia places the Mana Tree in these eastern caves. The seed’s source feels close now, though this remains one delver’s side-story, not a change to what is written.' },
-  worldedge: { heading: 'THE WORLD EDGE', title: 'The Edge of the Map', text: 'The World Edge, spoken of by travelers from Hurnscald. The seed’s signal is strongest here, and the road ends in quiet. What follows belongs to this delver alone.' },
+  tulimshar: { heading: 'TULIMSHAR', title: 'The Desert Gate', text: 'Every descent begins in Tulimshar. Guards, citizens and traders crowd its sandstone streets, while beyond the walls the old mines lie open where the Mana Seed was found. Mana’s flow still rolls beneath the dunes, the seed straining toward it, and the Kaore-touched creatures of the desert rise against it. Follow it, and the sand will give up what it hides.' },
+  hurnscald: { heading: 'HURNSCALD', title: 'Where the Forest Remembers', text: 'Hurnscald, Mayor Rakinorf’s town, sits among old woodland roads. The creatures along these roads have grown restless. Among the trees’ roots, the Mana flow runs strong, warding off the effects of Kaore as the forest stirs.' },
+  graveyard: { heading: 'THE GRAVEYARD', title: 'The Quiet Stones', text: 'The graveyard beyond Hurnscald lies silent until Mana’s flow stirs beneath it. Then the stones shift, and the dead rise. They now dance to the song of Kaore. Walk softly here.' },
+  artis: { heading: 'ARTIS RUINS', title: 'Elanore’s Ruins', text: 'Among the toppled stones of the Artis Ruins, Elanore tells of the last living Mana Tree, saddened by war, its roots hidden where no one has found them. The seed brightens each time she names it. A kinship, perhaps, but much remains unknown.' },
+  halinarzo: { heading: 'HALINARZO', title: 'The Savannah Roads', text: 'Halinarzo’s library shelves and sun-baked savannah trails carry great knowledge for those who venture there. Bandits watch these roads as closely as the beasts do. Keep your guard up.' },
+  nivalis: { heading: 'NIVALIS', title: 'Beneath the Snow', text: 'Nivalis lies buried under snow. The Blue Sage is said to know every northern trail, and here Mana’s flow runs through the ice itself, rousing the tainted creatures that shelter in the hills. Cold can slow it, but it cannot stop it.' },
+  frostia: { heading: 'FROSTIA', title: 'The Ice Court', text: 'King Gelid rules Frostia from deep within its ice caves, where every sound comes back twice. The frozen halls magnify Mana’s pulse until the Kaore-touched creatures of the north follow it down the trail. Every footstep echoes here. Move with purpose.' },
+  fortress: { heading: 'CANDOR ISLAND', title: 'The Caves Below', text: 'Merchant ships put in at Candor Island, but few who come ashore venture into the caves beneath it. Mana’s flow runs strong in the dark below the island, and something old and tainted has made its lair there. Mind your footing.' },
+  worldedge: { heading: 'THE WORLD EDGE', title: 'The Edge of the Map', text: 'Travelers in Hurnscald speak of the World Edge as the place where Aemil gives out. The land thins to bare stone and open sky, yet Mana’s flow runs clearer here than anywhere else, and the seed pulls hard toward it. Step carefully. The quiet here is not empty.' },
 };
 const characterChapters = {
-  arcanist: { heading: 'THE WARRIOR', title: 'Strength Over Speed', text: 'A guardian has fallen, and someone stepped forward from the crowd. The Warrior fights with bare hands and a hardy frame. Strikes come slowly, but they land.' },
-  warden: { heading: 'THE ROGUE', title: 'Out of the Dark', text: 'A hidden chamber gave up more than relics. The Rogue slipped out of the dark, light on their feet and quick with a bow. The armor is thin, but a moving target is hard to hit.' },
-  'candor-runner': { heading: 'CANDOR RUNNER', title: 'The Open Road', text: 'Boss Pinkie is down, and the Candor road lies open. The Runner is the fastest delver alive, with a slow draw but a clear path ahead. Speed is the only armor needed.' },
-  'world-edge-pilgrim': { heading: 'WORLD-EDGE PILGRIM', title: 'A Patient Walker', text: 'Another secret was found, and a patient traveler followed it in. The Pilgrim casts slowly and carefully, with extra health for the long walk. The World Edge calls, and they answer.' },
-  'hurnscald-herbalist': { heading: 'HURNSCALD HERBALIST', title: 'Roots and Frost', text: 'Hurnscald’s forest paths taught her which roots heal and which freeze. She begins with a Frost Rune and moves at a gentle pace. Cold magic and patient hands carry her through.' },
-  ironbound: { heading: 'IRONBOUND', title: 'The Sentinel Walks', text: 'A sentinel has fallen, and one of its own watchers stepped away from its post. Ironbound is heavy, slow, and hits like a collapsing wall. Four bombs hang from the belt.' },
-  'artis-archivist': { heading: 'ARTIS ARCHIVIST', title: 'Measured Spells', text: 'The Ruins held more than rumors. A scholar from Artis now walks the descent, measuring every spell. Hits land hard, but the Archivist cannot take many in return.' },
-  'glass-quill': { heading: 'GLASS QUILL', title: 'Every Shot a Word', text: 'The Spider Queen’s web has fallen, and a scribe stepped out with piercing shots and a fragile frame. Every word she writes is a risk. Every shot is a decision.' },
-  'vault-delver': { heading: 'VAULT DELVER', title: 'Fists and Patience', text: 'A descent complete, and a vault opened. The Vault Delver is slow on foot but fast with the fists. Many short strikes, and a stubborn habit of coming back.' },
-  'graveyard-keeper': { heading: 'GRAVEYARD KEEPER', title: 'The Keeper’s Key', text: 'The Reaper no longer guards the stones, so the Keeper has taken the key. A strong spirit pulse, a few bombs, and a long memory carry this delver through the dark.' },
-  'tulimshar-guard': { heading: 'TULIMSHAR GUARD', title: 'Hold the Line', text: 'The Great Red Slime is gone, and the city sent one of its own. The Guard is slow to strike, but carries extra bombs and a sturdy frame. Hold the line, then break it.' },
-  'halinarzo-ranger': { heading: 'HALINARZO RANGER', title: 'Long Shots', text: 'The Bandit Lord has fallen, and the savannah has a new watcher. The Ranger draws long shots from a distance. Quick and fragile, she stays out of arm’s reach.' },
-  'nivalis-oracle': { heading: 'NIVALIS ORACLE', title: 'The Snow Whispers', text: 'The Snowman Boss is broken, and the snow whispers a name. The Oracle carries a Frost Rune and walks slowly. Ice magic answers to those who wait.' },
-  'frostia-reclaimer': { heading: 'FROSTIA RECLAIMER', title: 'Taking It Back', text: 'The Yeti King’s caves are open again. The Reclaimer swings heavy fists with a great deal of health, slow but certain. Frostia’s ice is theirs to take back.' },
-  'fortress-keeper': { heading: 'FORTRESS KEEPER', title: 'Rooted Ground', text: 'The Forest Dragon is beaten, and a warden of the island steps forward. Rooted magic, steady footing, and modest speed. The Fortress Keeper holds ground.' },
-  'world-edge-veteran': { heading: 'WORLD EDGE VETERAN', title: 'The Last Light', text: 'The Night Dragon has fallen. At the very end of the map, a veteran lifts a bow to the last light. Very tough, very slow, and still standing when everyone else is gone.' },
+  arcanist: { heading: 'THE WARRIOR', title: 'Strength Over Speed', text: 'A guardian has fallen, and from the watching crowd, someone steps forward. The Warrior fights with bare hands and a body built to take punishment. The strikes come slowly, but every one of them lands.' },
+  warden: { heading: 'THE ROGUE', title: 'Out of the Dark', text: 'The hidden chamber held more than relics. Out of its dark slips the Rogue, light on their feet and quick with a bow. Their armor is thin, but a moving target is a hard one to hit.' },
+  'candor-runner': { heading: 'CANDOR RUNNER', title: 'The Open Road', text: 'The Pinkie Matriarch is down, and the road to Candor lies open. The Runner is the fastest delver alive: slow to draw the bow, but never caught standing still. For this one, speed is the only armor worth wearing.' },
+  'world-edge-pilgrim': { heading: 'WORLD EDGE PILGRIM', title: 'A Patient Walker', text: 'Another secret lies open, and a patient traveler has followed it in. The Pilgrim casts slowly and carefully, with the endurance for a very long walk. The World Edge calls to them, and they mean to answer.' },
+  'hurnscald-herbalist': { heading: 'HURNSCALD HERBALIST', title: 'Roots and Frost', text: 'Hurnscald’s forest paths taught her which roots heal and which ones freeze. She sets out with a Frost Rune already in hand and moves at an unhurried pace. Cold magic and patient hands carry her through.' },
+  ironbound: { heading: 'IRONBOUND', title: 'Off the Post', text: 'A sentinel has fallen, and one of its watchers has left the post for good. Ironbound is heavy and slow, and hits like a collapsing wall. Four bombs hang ready at the belt.' },
+  'artis-archivist': { heading: 'ARTIS ARCHIVIST', title: 'Measured Spells', text: 'The Ruins held more than rumors. A scholar of Artis now joins the descent, weighing every spell before it is cast. Those spells hit hard, but the Archivist cannot take many blows in return.' },
+  'glass-quill': { heading: 'GLASS QUILL', title: 'Every Shot a Word', text: 'The Spider Queen’s web lies torn, and a scribe steps out of it with piercing shots and a fragile frame. Every word she writes is a risk, and every shot she looses is a decision.' },
+  'vault-delver': { heading: 'VAULT DELVER', title: 'Fists and Patience', text: 'A descent is complete, and a sealed vault swings open. The Vault Delver is slow on foot but fast with the fists: a flurry of short strikes, and a stubborn habit of coming back for more.' },
+  'graveyard-keeper': { heading: 'GRAVEYARD KEEPER', title: 'The Keeper’s Key', text: 'With the Reaper gone from the stones, the Keeper has taken up the key. A strong spirit pulse, a few bombs, and a long memory carry this delver through the dark.' },
+  'tulimshar-guard': { heading: 'TULIMSHAR GUARD', title: 'Hold the Line', text: 'The Great Red Slime is gone, and Tulimshar sends one of its own after it. The Guard is slow to strike but sturdy, with extra bombs on hand. Hold the line, then break it.' },
+  'halinarzo-ranger': { heading: 'HALINARZO RANGER', title: 'Long Shots', text: 'The Bandit Lord has fallen, and the savannah has a new watcher. The Ranger looses long shots from far away. Quick and fragile, she makes a habit of staying out of arm’s reach.' },
+  'nivalis-oracle': { heading: 'NIVALIS ORACLE', title: 'The Snow Whispers', text: 'The Snowman Boss lies broken, and the snow whispers a name. The Oracle carries a Frost Rune and walks with slow, deliberate steps. Ice magic answers to those who are willing to wait.' },
+  'frostia-reclaimer': { heading: 'FROSTIA RECLAIMER', title: 'Taking It Back', text: 'The Yeti King’s caves stand open again. The Reclaimer swings heavy fists and shrugs off punishment, slow but certain. Frostia’s ice is theirs to take back.' },
+  'fortress-keeper': { heading: 'CANDOR KEEPER', title: 'Rooted Ground', text: 'The Forest Dragon is beaten, and a warden of Candor Island steps forward. Rooted magic, steady footing, and an unhurried stride: the Candor Keeper does not give ground.' },
+  'world-edge-veteran': { heading: 'WORLD EDGE VETERAN', title: 'The Last Light', text: 'The Night Dragon has fallen. At the very edge of the map, a veteran raises a bow against the last of the light. Very tough, very slow, and still standing when everyone else has gone.' },
 };
 const keys = {};
 const gamepadInput = { connected: false, family: 'xbox', moveX: 0, moveY: 0, dpadX: 0, dpadY: 0, dpadFacing: false, aimX: 1, aimY: 0, aimActive: false, shoot: false };
@@ -923,7 +944,7 @@ const classProfiles = {
   Pilgrim: { magic: 1.1, pool: 36, growth: 3 },
   Herbalist: { magic: 1.15, pool: 38, growth: 3 },
   Sporeling: { magic: 1.15, pool: 40, growth: 3 },
-  Sentinel: { melee: 1.5, meleeRate: 0.85, magic: 0.6, pool: 40, growth: 3.2 },
+  Sapper: { melee: 1.5, meleeRate: 0.85, magic: 0.6, pool: 40, growth: 3.2 },
   Scholar: { magic: 1.5, melee: 0.7, bow: 0.8, pool: 46, growth: 3.5 },
   Scribe: { bow: 1.3, pool: 26, growth: 2 },
   Delver: { melee: 1.0, meleeRate: 1.2, pool: 30, growth: 2.5 },
@@ -938,7 +959,7 @@ const classProfiles = {
 // Signature perks make each class play differently beyond its weapon style.
 const classSignatures = {
   // active: true gives the class a dedicated key-4 ability on its own cooldown; it never replaces keys 1-3.
-  Sentinel: { label: 'Bomb Forge', desc: 'Key 4: forge a free bomb at your feet', active: true, cooldown: 6, color: '#ffad59' },
+  Sapper: { label: 'Bomb Forge', desc: 'Key 4: forge a free bomb at your feet', active: true, cooldown: 6, color: '#ffad59' },
   Scribe: { label: 'Laser Quill', desc: 'Key 4: fire a piercing laser beam', active: true, cooldown: 5, color: '#ff7a9c' },
   Keeper: { label: 'Spirit Nova', desc: 'Key 4: release a spirit blast around you', active: true, cooldown: 9, color: '#b9ffd8' },
   Sporeling: { label: 'Spore Bloom', desc: 'Magic slot fires spore pods that burst into spores' },
@@ -1575,6 +1596,7 @@ function stopChapterNarration() {
 }
 
 function speakChapter(text) {
+  if (!narrationActive()) return;
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -1588,7 +1610,7 @@ function speakChapter(text) {
 
 function startChapterNarration(card) {
   stopChapterNarration();
-  if (audioSettings.tts !== true) return;
+  if (!narrationActive()) return;
   const audio = new Audio(`assets/audio/intro-${card.key.replace(':', '-')}.ogg`);
   audio.volume = 0.76;
   chapterAudio = audio;
@@ -1785,7 +1807,7 @@ function updateControlsHint() {
 
 function updateHud() {
   if (!character) {
-    statsEl.textContent = mode === 'prologue' ? 'Candor Island · Hurnscald · Artis Ruins' : 'Choose a delver';
+    statsEl.textContent = mode === 'prologue' ? 'Tulimshar · Hurnscald · Artis Ruins' : 'Choose a delver';
     updateControlsHint();
     return;
   }
@@ -2271,19 +2293,19 @@ const floorThemes = {
   halinarzo: { name: 'Halinarzo Savannah', wall: '#453b2b', trim: '#d79d4e', detail: '#93c77d' },
   nivalis: { name: 'Nivalis', wall: '#314754', trim: '#6ec9dc', detail: '#ecf7ef' },
   frostia: { name: 'Frostia', wall: '#2e3146', trim: '#9b9ce1', detail: '#d9dcff' },
-  fortress: { name: 'Fortress Island', wall: '#2c3531', trim: '#b78558', detail: '#d3c889' },
+  fortress: { name: 'Candor Island', wall: '#2c3531', trim: '#b78558', detail: '#d3c889' },
   worldedge: { name: 'World Edge', wall: '#29253a', trim: '#a27dbc', detail: '#f1ae88' },
 };
 const regionalBossClues = {
-  tulimshar: 'The Great Red Slime’s core beats in time with the seed. The desert did not create the pulse; it only revealed that something could answer it.',
-  hurnscald: 'Jacko’s lantern flares when roots pass beneath the chamber. The pulse follows the forest roads that Hurnscald travelers take toward the World Edge.',
-  graveyard: 'The Reaper leaves pale spores in the cracks between stones. The restless dead are reacting to the seed’s rhythm, not choosing a new war.',
-  artis: 'The Golem’s runes repeat the mark Amelia described in her notes. It is a resemblance, not proof, but the seed brightens when the Mana Tree is named.',
-  halinarzo: 'A salvaged route chart marks the same tremor beneath the savannah. The seed’s influence crosses habitats; it does not belong to one kind of monster.',
-  nivalis: 'The Snowman Boss breaks apart, and the pulse continues beneath the snow. Cold can hide the signal, but it cannot silence it.',
-  frostia: 'The Yeti King’s rage fades when the pulse stops. The monsters were being drawn toward the seed, not commanded by it.',
-  fortress: 'Amelia’s account places the Mana Tree in these caves. The seed echoes its rhythm, though no delver can yet say whether it is a root, a splinter, or only a witness.',
-  worldedge: 'At the World Edge, the seed falls quiet. The journey suggests a connection to the Mana Tree, but leaves its origin unanswered for another descent.',
+  tulimshar: 'The Great Red Slime’s core was thick with Kaore and shuddered whenever Mana’s flow passed beneath the sand. The desert did not create that flow; it only showed that the seed could follow it.',
+  hurnscald: 'Mana’s flow follows the same roads that Hurnscald’s travelers take toward the World Edge. Jacko’s lantern flares as the seed’s presence is revealed.',
+  graveyard: 'The Reaper left pale spores in the cracks between the stones. The restless dead were never choosing a new war; the Kaore in them was recoiling from Mana’s flow.',
+  artis: 'The Ancient Golem’s runes repeat the mark Elanore described in her notes. It is a resemblance, not proof, but the runes trace where Mana once flowed, and the seed strains toward them.',
+  halinarzo: 'A route chart salvaged from the Bandit Lord traces Mana’s flow beneath the savannah, along the same lines recorded in Halinarzo’s library. The seed pulls along them, across every habitat and past every kind of monster.',
+  nivalis: 'The Snowman Boss breaks apart, yet Mana’s flow carries on beneath the snow, steady and untroubled. The guardian was never its source, only one more creature caught in its path.',
+  frostia: 'The Yeti King’s rage rose and fell with Mana’s pulse. The Kaore in it could not bear the flow, and neither can the others.',
+  fortress: 'In the Forest Dragon’s lair, the seed strained toward a flow of Mana older than the island. No delver can yet say whether it is a root of the last Mana Tree, a splinter, or only a trace.',
+  worldedge: 'With the Night Dragon gone, the seed goes still for a breath, as if listening for Mana’s flow. Every sign points toward the Mana Tree, yet the seed’s origin remains unanswered.',
 };
 
 function createUpgradeReward(idSuffix, dungeonRooms) {
@@ -3081,7 +3103,7 @@ function spawnRoom(room) {
         bosspinkie: 'PINKIE MATRIARCH',
         mouboo: 'MOU-BOO ELDER', spider: 'RUIN STALKER', 'spider-queen': 'SPIDER QUEEN',
         bluepar: 'GREAT BLUEPAR',
-        skeleton: 'BONE WARDEN', zombie: 'RESTLESS VETERAN', 'spore-sower': 'SPORE SOWER',
+        skeleton: 'BONE GUARD', zombie: 'RESTLESS VETERAN', 'spore-sower': 'SPORE SOWER',
         junglefowl: 'SAVANNAH RAZORBEAK', snowman: 'FROSTBOUND SENTINEL', yeti: 'YETI BRUTE',
         vampirebat: 'NIGHTWING', frostiana: 'FROST WITCH', troll: 'CAVE TROLL',
       }[kind];
@@ -3122,16 +3144,16 @@ function spawnRoom(room) {
 
   if (room.type === 'start') {
     const regionStories = {
-      tulimshar: 'Tulimshar is the first stop: its guards, guilds, and desert trade make it a busy crossing. The mana seed’s first pulse was traced to an old road outside the city.',
+      tulimshar: 'Tulimshar, where every descent begins. Beyond its walls lie the old mines that gave up the Mana Seed.',
       candor: 'Candor Island is where many new adventurers learn the roads. This side-story follows a rumor from the coast; it leaves the island’s established stories intact.',
-      hurnscald: 'Hurnscald’s mayor Rakinorf is a known contact for travelers asking about the World Edge. The seed pulse is now stronger beneath the forest road.',
-      graveyard: 'The old graveyard is quiet until the seed pulse passes under the stones. The restless dead are reacting to it, not to a change in their recorded history.',
-      artis: 'Amelia in the Artis Ruins tells of a Mana Tree in a cave on Fortress Island, saddened by war. The seed may be answering that distant wound.',
-      halinarzo: 'Halinarzo’s library and savannah roads offer clues about old passages. A repeated mark in the journal matches the pulse from the seed.',
-      nivalis: 'Nivalis lies under snow. The Blue Sage is said to know more about the northern trails; the seed’s pulse carries through the ice.',
-      frostia: 'Frostia is ruled by King Gelid. The ice caves amplify the seed’s pulse, drawing nearby monsters toward the trail.',
-      fortress: 'Fortress Island is where Amelia places the Mana Tree, deep in the eastern caves. The seed’s source is close, but the delver’s account remains a side-story.',
-      worldedge: 'The trail reaches the World Edge, a destination discussed by Hurnscald travelers. The seed’s signal is strongest here, but what follows is this delver’s side-story.',
+      hurnscald: 'Hurnscald’s woodland roads. Mayor Rakinorf hears from every traveler bound for the World Edge. Mana’s flow runs deep beneath the forest.',
+      graveyard: 'The old graveyard. The stones stay quiet until Mana’s flow passes under them, and then the Kaore-tainted dead begin to stir.',
+      artis: 'The Artis Ruins. Elanore tells of the last living Mana Tree, saddened by war. The seed may be seeking that distant kin.',
+      halinarzo: 'Halinarzo’s library holds clues to old pathways. Markings record the flow of Mana through the town’s roads.',
+      nivalis: 'Snowbound Nivalis. The Blue Sage is said to know the northern trails, and Mana’s flow runs clear through the ice.',
+      frostia: 'Frostia, ruled by King Gelid. Its ice caves magnify Mana’s pulse and draw the tainted down the trail.',
+      fortress: 'Candor Island, where ships put in and new adventurers learn the roads. Mana’s flow runs down into the caves below, and the seed pulls after it.',
+      worldedge: 'The World Edge, where Hurnscald’s maps give out. Mana’s flow runs clearer here than anywhere else.',
     };
     storyText = regionStories[currentRegionId()];
     if (currentRegionId() === 'hurnscald' && unlockCharacter('hurnscald-herbalist')) {
@@ -3141,11 +3163,11 @@ function spawnRoom(room) {
       showMessage('Reached the Artis Ruins: Artis Archivist is now selectable.', 4);
     }
   } else if (room.type === 'boss') {
-    storyText = `${currentFloorTheme().name}: a guardian bars this optional side-story route. These encounters do not alter the established TMW quest history.`;
+    storyText = `${currentFloorTheme().name}: a guardian steeped in Kaore bars the way down.`;
   } else if (room.type === 'miniboss') {
-    storyText = 'A powerful sentinel guards this optional side chamber.';
+    storyText = 'A powerful sentinel holds this side chamber.';
   } else if (room.type === 'secret') {
-    storyText = 'A sacred chamber rests undisturbed, its hidden relics holding a gift. Disturb them at your own risk.';
+    storyText = 'A sacred chamber, untouched for ages. Its relics hold a gift, but disturb them at your own risk.';
     if (!save.warden) {
       save.warden = true;
       persistSave();
@@ -3154,9 +3176,9 @@ function spawnRoom(room) {
     }
     unlockCharacter('world-edge-pilgrim');
   } else if (room.type === 'shop') {
-    storyText = 'A traveling keeper offers supplies to those brave enough to descend.';
+    storyText = 'A traveling merchant has laid out wares for anyone bold enough to come this far.';
   } else if (room.type === 'bank') {
-    storyText = 'A quiet vault protects your stored zenny between descents.';
+    storyText = 'A quiet vault keeps your stored zenny safe between descents.';
   } else {
     storyText = '';
   }
@@ -3281,16 +3303,16 @@ function beginRun() {
   mode = 'playing';
   for (const page of prologuePages) recordStory(page.heading, page.text);
   const ancestryNotes = {
-    humanMale: 'Humans in this delver tale read the seed through memory and craft: tools, maps, and the repeating marks left in old roads.',
-    humanFemale: 'Humans in this delver tale read the seed through memory and craft: tools, maps, and the repeating marks left in old roads.',
-    elfMale: 'Elven delvers listen for mana moving through living roots. The seed’s pulse sounds familiar, but they cannot tell whether it is kin to the Mana Tree.',
-    elfFemale: 'Elven delvers listen for mana moving through living roots. The seed’s pulse sounds familiar, but they cannot tell whether it is kin to the Mana Tree.',
-    orcMale: 'Orc delvers feel the pulse as weight in stone and bone. Their strength helps them endure it, not command it.',
-    tritanMale: 'Tritan delvers compare the seed’s rhythm to distant tides: a signal can cross a boundary without revealing its source.',
-    raijinFemale: 'Raijin delvers notice the pressure before the pulse, like weather gathering beyond sight. The clue is sensation, not certainty.',
+    humanMale: 'Human delvers read the seed through memory and craft: tools, maps, and the marks that repeat along old roads.',
+    humanFemale: 'Human delvers read the seed through memory and craft: tools, maps, and the marks that repeat along old roads.',
+    elfMale: 'Elven delvers listen for Mana moving through living roots. The way the seed pulls toward that flow feels familiar to them, though none can say whether it is kin to the Mana Tree.',
+    elfFemale: 'Elven delvers listen for Mana moving through living roots. The way the seed pulls toward that flow feels familiar to them, though none can say whether it is kin to the Mana Tree.',
+    orcMale: 'Orc delvers feel Mana’s flow as a weight in stone and bone. Their strength lets them endure it, never command it.',
+    tritanMale: 'Tritan delvers liken Mana’s flow to distant tides: a current can cross any boundary without revealing where it began.',
+    raijinFemale: 'Raijin delvers feel the pressure of Mana’s flow before it arrives, like a storm gathering beyond sight. It is a sensation, not a certainty.',
   };
   recordStory('Ancestry · ' + entry.className, ancestryNotes[entry.raceHead] ||
-    'This delver reads the seed through a tradition not yet written into the field notes.');
+    'This delver reads the seed through a tradition the field notes have yet to record.');
   spawnRoom(currentRoom);
   saveRunState();
   discoverRegion();
@@ -5213,7 +5235,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       linkedTwin.linkShieldSeen = false;
       linkedTwin.speed /= 1.08;
       addParticles(linkedTwin.x, linkedTwin.y, '#d8e6ff', 8, 80);
-      showMessage(`${linkedTwin.title || linkedTwin.kind} loses its linked armor.`, 2.5);
+      showMessage(`${linkedTwin.title || monsterDisplayName(linkedTwin.kind)} loses its linked armor.`, 2.5);
     }
     spawnEnemyOffspring(enemy);
     if (wasBoss) {
@@ -5234,7 +5256,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       })[enemy.kind];
       const newlyUnlocked = unlockedId ? unlockCharacter(unlockedId) : false;
       const unlockedName = characterRoster.find((entry) => entry.id === unlockedId)?.name;
-      recordStory(`${enemy.title} defeated`, `${enemy.title} has fallen. ${newlyUnlocked && unlockedName ? `${unlockedName} is now available. ` : ''}This guardian belongs to the side-story and does not alter TMW quest history.`);
+      recordStory(`${enemy.title} defeated`, `${enemy.title} has fallen, and the Kaore in this land begins to thin.${newlyUnlocked && unlockedName ? ` ${unlockedName} is now available.` : ''}`);
       recordStory(`${currentFloorTheme().name} · echo`, regionalBossClues[currentRegionId()]);
       persistSave();
       const unlockNotice = newlyUnlocked && unlockedName ? ` ${unlockedName} is now selectable.` : '';
@@ -5298,7 +5320,7 @@ function explodeBomb(bomb) {
       : Math.abs(bomb.y - ROOM_H / 2) < 78;
     if (secret.room.hidden && alongWall && distanceBetween(bomb, wallPoint) < bomb.radius + 60) {
       secret.room.hidden = false;
-      recordStory('A hidden passage', 'A bomb opened a concealed room. Its relics are your discovery in this side-story, not a change to a canonical TMW quest.');
+      recordStory('A hidden passage', 'A bomb blasted open a concealed room. Its relics have waited a long time for someone to find them.');
       if (!secret.keyDropped) {
         pickups.push({ x: bomb.x, y: bomb.y, kind: 'key' });
         secret.keyDropped = true;
@@ -5406,7 +5428,7 @@ function interact(withdrawFromBank = false) {
       unlockCharacter('vault-delver');
       persistSave();
       clearSavedRun();
-      showMessage("The mana current flows toward Candor again. The Mana Tree's light steadies.", 8);
+      showMessage('With the last guardian gone, the Kaore drains from the land. The Mana Seed takes root in clean soil, and its roots reach out to join Mana’s flow.', 10);
       return;
     }
     currentFloor += 1;
@@ -5426,7 +5448,7 @@ function interact(withdrawFromBank = false) {
     spawnRoom(currentRoom);
     saveRunState();
     discoverRegion();
-    showMessage(`Chapter ${currentFloor}: the trail descends deeper into the sanctum.`, 5);
+    showMessage(`Chapter ${currentFloor}: the seed pulls you deeper into the sanctum, following Mana’s flow.`, 5);
     return;
   }
   const shopSlot = withdrawFromBank ? -1 : nearestShopSlot();
@@ -5705,7 +5727,7 @@ function useClassSignature() {
   }
   const cls = character.className;
   const angle = currentAimAngle();
-  if (cls === 'Sentinel') {
+  if (cls === 'Sapper') {
     if (bombs.some((bomb) => bomb.owner !== 'enemy' && bomb.fuse > 0)) return;
     bombsHeld += 1;
     placeBomb();
@@ -5857,7 +5879,7 @@ function damagePlayer(damageAmount = 1) {
   if (player.hp <= 0) {
     mode = 'gameover';
     clearSavedRun();
-    showMessage('The sanctum claims another delver. Select a character to try again.', 5);
+    showMessage('The sanctum claims another delver. Choose who descends next.', 5);
   }
   updateHud();
 }
@@ -5873,7 +5895,7 @@ function shieldWithCompanion(projectile) {
   addParticles(companion.x, companion.y, '#bcf0a3', 9, 100);
   if (companion.hp <= 0) {
     companion.respawnTimer = 10;
-    showMessage(`${companion.kind} familiar was knocked out and will return in 10 seconds.`, 2.5);
+    showMessage(`${monsterDisplayName(companion.kind)} familiar was knocked out and will return in 10 seconds.`, 2.5);
   }
   return true;
 }
@@ -6477,7 +6499,7 @@ function updateCompanions(dt) {
         companion.hp = companion.maxHp;
         companion.hitCooldown = 0;
         companion.enemyCooldowns.clear();
-        showMessage(`${companion.kind} familiar has returned.`, 1.5);
+        showMessage(`${monsterDisplayName(companion.kind)} familiar has returned.`, 1.5);
       }
       companion.hp = Math.min(companion.maxHp, companion.hp);
       return;
@@ -7939,7 +7961,7 @@ const shroomHatByItem = {
 };
 const classHats = {
   Mage: 'wizardhat', Warrior: 'samuraihelmet', Rogue: 'assassinhood', Scout: 'bandana', Pilgrim: 'browndeserthat',
-  Herbalist: 'wreath', Sentinel: 'centurionhelmet', Scholar: 'graduationcap', Scribe: 'brimmedfeatherhat',
+  Herbalist: 'wreath', Sapper: 'centurionhelmet', Scholar: 'graduationcap', Scribe: 'brimmedfeatherhat',
   Delver: 'minerhat', Keeper: 'darkhelm', Guard: 'soldierhelmet', Ranger: 'brimmedhat', Oracle: 'fairyhat',
   Reclaimer: 'earmuffs', Warden: 'antlerhat', Veteran: 'warlordhelmet', Sporeling: 'shroomhat',
 };
@@ -8450,7 +8472,7 @@ function drawWorld() {
     ctx.fillStyle = '#f2e5c6';
     ctx.font = 'bold 13px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('KEEPER', ROOM_W / 2, ROOM_H / 2 - 28);
+    ctx.fillText('MERCHANT', ROOM_W / 2, ROOM_H / 2 - 28);
     ctx.fillStyle = '#d3c4a6';
     ctx.font = '12px Arial';
     ctx.fillText('Stand by an item and press E to buy', ROOM_W / 2, ROOM_H / 2 + 43);
@@ -10072,12 +10094,12 @@ function codexEntries() {
   };
   return save.discoveredEnemyIds.map((kind) => ({
     id: kind,
-    name: kind.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '),
+    name: monsterDisplayName(kind),
     description: [({
-      bandit: 'A road fighter whose arrows reveal the Trail-Worn Bow.',
-      'banditlord': 'The bandit captain unleashes a spreading fire burst.',
-      wisp: 'A drifting spirit that hurls charged lightning shots.',
-      'spore-sower': 'A fungal caster whose spores bloom into a radial burst.',
+      bandit: 'A road fighter. Study their arrows to unlock the Trail-Worn Bow.',
+      'banditlord': 'Captain of the road bandits, who answers any threat with a spreading burst of fire.',
+      wisp: 'A drifting spirit that hurls crackling bolts of lightning.',
+      'spore-sower': 'A fungal caster whose seed orbs burst into a ring of spores.',
     }[kind] || 'Encountered during a descent.'),
     ...((enemyMoves[kind] || []).filter((abilityId) => save.discoveredEnemyAbilityIds.includes(abilityId))
       .map((abilityId) => `Witnessed: ${moveNames[abilityId]}.`))].join(' '),
@@ -10117,6 +10139,21 @@ function advancePrologue(direction) {
   stopPrologueNarration();
   prologuePage = nextPage;
   startPrologueNarration();
+}
+
+function countWrappedLines(text, maxWidth) {
+  let line = '';
+  let count = 1;
+  for (const word of text.split(/\s+/)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(candidate).width > maxWidth) {
+      line = word;
+      count += 1;
+    } else {
+      line = candidate;
+    }
+  }
+  return count;
 }
 
 function wrapCanvasText(text, x, y, maxWidth, lineHeight) {
@@ -10205,7 +10242,9 @@ function drawChapter() {
   ctx.fillText('CONTINUE', next.x + next.width / 2, next.y + 24);
   ctx.fillStyle = '#c5b9a6';
   ctx.font = '12px Arial';
-  ctx.fillText('Enter, Space, a click, or A continues. The narrator reads each entry aloud.', canvas.width / 2, 520);
+  ctx.fillText(narrationActive()
+    ? 'Enter, Space, a click, or A continues. The narrator reads each entry aloud.'
+    : 'Enter, Space, a click, or A continues.', canvas.width / 2, 520);
 }
 
 function drawCharacterSelect() {
@@ -10938,17 +10977,30 @@ function drawStoryJournal() {
   ctx.fillStyle = '#f2e3c4';
   ctx.font = 'bold 25px Georgia';
   ctx.fillText('Roadside notes', 104, 116);
-  let y = 157;
-  for (const entry of storyLog.slice(-6)) {
+  // Keep the newest entries that fit, then draw them oldest first.
+  const textWidth = canvas.width - 212;
+  const top = 157;
+  const bottom = canvas.height - 85;
+  ctx.font = '14px Arial';
+  const visible = [];
+  let height = 0;
+  for (const entry of storyLog.slice().reverse()) {
+    const lines = countWrappedLines(entry.text, textWidth);
+    const entryHeight = 22 + lines * 20 + 18;
+    if (top + height + entryHeight - 38 > bottom) break;
+    visible.unshift(entry);
+    height += entryHeight;
+  }
+  let y = top;
+  for (const entry of visible) {
     ctx.fillStyle = '#d9bd83';
     ctx.font = 'bold 14px Arial';
     ctx.fillText(entry.title, 106, y);
     y += 22;
     ctx.fillStyle = '#d6d0be';
     ctx.font = '14px Arial';
-    const lines = wrapCanvasText(entry.text, 106, y, canvas.width - 212, 20);
+    const lines = wrapCanvasText(entry.text, 106, y, textWidth, 20);
     y += lines * 20 + 18;
-    if (y > canvas.height - 105) break;
   }
   ctx.fillStyle = '#b9c8b3';
   ctx.font = '12px Arial';
@@ -11162,7 +11214,7 @@ window.addEventListener('keydown', (event) => {
     handleControlsKey(event, key);
     return;
   }
-  if (key === 't' && (mode === 'prologue' || mode === 'select' || mode === 'paused' || mode === 'chapter')) {
+  if (NARRATION_ENABLED && key === 't' && (mode === 'prologue' || mode === 'select' || mode === 'paused' || mode === 'chapter')) {
     setTextToSpeech(audioSettings.tts !== true);
     return;
   }
