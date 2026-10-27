@@ -2265,7 +2265,12 @@ function pauseGame() {
   pointer.down = false;
   saveRunState();
   mode = 'paused';
-  showMessage('Paused. Press Start/A to resume or B to save and exit.', 9999);
+  const labels = pauseControlLabels();
+  showMessage(`Paused. Press ${labels.resume} to resume or ${labels.exit} to save and exit.`, 9999);
+}
+
+function pauseControlLabels() {
+  return lastInputMode === 'controller' ? { resume: 'Start/A', exit: 'B' } : { resume: 'P or R', exit: 'X' };
 }
 
 function resumeGame() {
@@ -2487,7 +2492,8 @@ function strongestPlayerSingleHit() {
   if (consumables.some((item) => item.id === 'mana-burst' && item.count > 0)) {
     strongestHit = Math.max(strongestHit, 8);
   }
-  if (ownedItems.has('prism') && weapon.shotCount > 1 && getActiveAttackElement()) {
+  if (ownedItems.has('prism') && weapon.shotCount > 1 && getActiveAttackElement() &&
+      getActiveAttackElement() !== 'bubble') {
     strongestHit = Math.max(strongestHit, Math.ceil(baseDamage * 1.6));
   }
   return Math.ceil(strongestHit);
@@ -2824,7 +2830,8 @@ function grantUpgrade(item, source = 'descent') {
     return false;
   }
   if (['ability', 'element', 'skill'].includes(item.kind)) {
-    weapon.fireDelay = Math.max(0.55, weapon.fireDelay * 0.88);
+    // Never slows an attack that is already faster than the 0.55 s floor.
+    weapon.fireDelay = Math.max(Math.min(weapon.fireDelay, 0.55), weapon.fireDelay * 0.88);
   }
   if (item.id === 'sanctum-blessing' || item.id.startsWith('sanctum-blessing-')) {
     if (extraHearts() < SOFT_EXTRA_HEARTS) gainMaxHeart();
@@ -3022,6 +3029,13 @@ function bossForCurrentArea() {
   })[currentRegionId()] || 'slime-mother';
 }
 
+function addRoomRewardPickup(room) {
+  if (!room.rewardUpgrade || room.rewardClaimed) return;
+  if (['miniboss', 'shrine'].includes(room.type) && !room.cleared) return;
+  if (pickups.some((pickup) => pickup.kind === 'upgrade' && pickup.item?.id === room.rewardUpgrade.id)) return;
+  pickups.push({ x: ROOM_W / 2, y: ROOM_H / 2, kind: 'upgrade', item: room.rewardUpgrade, room });
+}
+
 function spawnRoom(room) {
   applyRoomSize(room);
   if (room.type === 'start' && !room.entered) {
@@ -3051,14 +3065,19 @@ function spawnRoom(room) {
     companion.y = player.y;
     companion.enemyCooldowns = new Map();
   }
-    if (room.rewardUpgrade && !room.rewardClaimed &&
-      (room.type !== 'miniboss' || room.cleared) &&
-      (room.type !== 'shrine' || room.cleared)) {
-    pickups.push({ x: ROOM_W / 2, y: ROOM_H / 2, kind: 'upgrade', item: room.rewardUpgrade, room });
-  }
   room.visited = true;
   if (room.type === 'shop') refreshShopStock(room);
-  if (restoreRoomRuntime(room)) {
+  const restored = restoreRoomRuntime(room);
+  // Older saves could hold several copies of the same reward; keep one.
+  const seenUpgradeIds = new Set();
+  for (let index = pickups.length - 1; index >= 0; index -= 1) {
+    const upgradeId = pickups[index].kind === 'upgrade' ? pickups[index].item?.id : null;
+    if (!upgradeId) continue;
+    if (seenUpgradeIds.has(upgradeId)) pickups.splice(index, 1);
+    else seenUpgradeIds.add(upgradeId);
+  }
+  addRoomRewardPickup(room);
+  if (restored) {
     room.visited = true;
     room.entered = true;
     updateHud();
@@ -3843,7 +3862,9 @@ function shoot(options = null) {
       ? style === 'magic' ? -0.08 : 0.08
       : 0;
     const element = style === 'bow' && !infuse ? null : getActiveAttackElement();
-    const fusedElementalShot = !morph.surround && ownedItems.has('prism') && Boolean(element) && weapon.shotCount > 1;
+    // Prism fans out by default; only a non-water element fuses the fan into one heavy shot.
+    const fusedElementalShot = !morph.surround && ownedItems.has('prism') && Boolean(element) &&
+      element !== 'bubble' && weapon.shotCount > 1;
     const baseShots = tripleBow ? Math.max(3, weapon.shotCount) : weapon.shotCount;
     const shotCount = Math.min(morph.surround ? 4 : fusedElementalShot ? 1 : baseShots, volleyBudget);
     volleyBudget -= shotCount;
@@ -5117,10 +5138,16 @@ function dropLoot(x, y, boss = false) {
   if (boss) {
     const abilityCount = ownedAbilityCount() + reservedAbilityCount();
     const abilities = shopItemCatalog.filter((item) => item.kind === 'ability' &&
-      !ownedItems.has(item.id) && !reservedUpgradeIds.has(item.id) && abilityCount < 2);
+      !ownedItems.has(item.id) && !reservedUpgradeIds.has(item.id) && abilityCount < 2 &&
+      save.purchasedAbilityIds.includes(item.id) && isUpgradeAvailable(item));
     if (abilities.length > 0) {
       const ability = abilities[Math.floor(Math.random() * abilities.length)];
       pickups.push({ x, y, kind: 'upgrade', item: ability, room: currentRoom });
+    } else {
+      // No eligible ability: the guardian still leaves a heart and some zenny.
+      pickups.push({ x, y, kind: 'heart' });
+      spawnCoin(x + 18, y);
+      spawnCoin(x - 18, y);
     }
     return;
   }
@@ -5440,6 +5467,8 @@ function interact(withdrawFromBank = false) {
       showMessage('Unlocked: Artis Archivist.', 3);
     }
     resetFloorCoins();
+    // Unclaimed rewards on the floor being left must not keep blocking offers on the next one.
+    reservedUpgradeIds.clear();
     const generated = generateDungeon();
     rooms = generated.rooms;
     currentRoom = generated.startRoom;
@@ -6108,14 +6137,6 @@ function updateEnemy(enemy, dt) {
   if (enemy.slowTimer > 0) {
     enemy.slowTimer = Math.max(0, enemy.slowTimer - dt);
     dt *= 0.4;
-  }
-  enemy.wetTimer = Math.max(0, (enemy.wetTimer || 0) - dt);
-  enemy.burnTimer = Math.max(0, (enemy.burnTimer || 0) - dt);
-  enemy.burnCooldown = Math.max(0, (enemy.burnCooldown || 0) - dt);
-  if (enemy.burnTimer > 0 && enemy.burnCooldown <= 0) {
-    enemy.burnCooldown = 0.8;
-    damageEnemy(enemy, 1, enemy.x, enemy.y);
-    if (!enemies.includes(enemy)) return;
   }
   enemy.wetTimer = Math.max(0, (enemy.wetTimer || 0) - dt);
   enemy.burnTimer = Math.max(0, (enemy.burnTimer || 0) - dt);
@@ -6840,6 +6861,7 @@ function update(dt) {
       enemyProjectiles.splice(i, 1);
     } else if (hitsPlayer) {
       damagePlayer();
+      enemyProjectiles.splice(i, 1);
     } else if (projectileExpired) {
       enemyProjectiles.splice(i, 1);
     }
@@ -6865,9 +6887,21 @@ function update(dt) {
         continue;
       }
     }
-    if (distanceBetween(player, pickup) > player.radius + 14) continue;
+    if (distanceBetween(player, pickup) > player.radius + 14) {
+      pickup.refused = false;
+      continue;
+    }
     if (pickup.kind === 'heart' && player.hp >= player.maxHp) continue;
     if (pickup.kind === 'xp') gainXp(1);
+    if (pickup.kind === 'upgrade') {
+      // A refused upgrade stays on the floor; it is offered again once the player steps off it.
+      if (pickup.refused) continue;
+      if (!grantUpgrade(pickup.item)) {
+        pickup.refused = true;
+        continue;
+      }
+      if (pickup.room) pickup.room.rewardClaimed = true;
+    }
     if (pickup.kind === 'coin') coins += 1;
     if (pickup.kind === 'heart') {
       player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -6886,13 +6920,13 @@ function update(dt) {
         pickups.splice(i, 1);
         continue;
       }
-      if (!grantUpgrade(pickup.item, 'drop')) continue;
+      if (pickup.refused) continue;
+      if (!grantUpgrade(pickup.item, 'drop')) {
+        pickup.refused = true;
+        continue;
+      }
     }
     if (pickup.guaranteedTreasure && pickup.room) pickup.room.treasureClaimed = true;
-    if (pickup.kind === 'upgrade') {
-      pickup.room.rewardClaimed = true;
-      grantUpgrade(pickup.item);
-    }
     pickups.splice(i, 1);
     updateHud();
   }
@@ -6919,15 +6953,7 @@ function update(dt) {
 
   if (enemies.length === 0 && !currentRoom.cleared && currentRoom.type !== 'start' && currentRoom.type !== 'shop') {
     currentRoom.cleared = true;
-    if (['miniboss', 'shrine'].includes(currentRoom.type) && currentRoom.rewardUpgrade && !currentRoom.rewardClaimed) {
-      pickups.push({
-        x: ROOM_W / 2,
-        y: ROOM_H / 2,
-        kind: 'upgrade',
-        item: currentRoom.rewardUpgrade,
-        room: currentRoom,
-      });
-    }
+    if (['miniboss', 'shrine'].includes(currentRoom.type)) addRoomRewardPickup(currentRoom);
     if (currentRoom.type === 'boss') {
       showMessage('The guardian is defeated. The seal opens; the descent continues.', 5);
     } else {
@@ -11131,8 +11157,8 @@ function pollGamepad() {
   } else if (mode === 'codex') {
     if (wasButtonPressed(0) || wasButtonPressed(1) || wasButtonPressed(9)) closeCodex();
     if (wasButtonPressed(4) || wasButtonPressed(5)) toggleCodexTab();
-    if (dpadY !== 0) {
-      codexScroll = clamp(codexScroll + (dpadY > 0 ? 1 : -1), 0, Math.max(0, codexEntries().length - 7));
+    if (wasButtonPressed(12) || wasButtonPressed(13)) {
+      codexScroll = clamp(codexScroll + (wasButtonPressed(13) ? 1 : -1), 0, Math.max(0, codexEntries().length - 7));
     }
   } else if (mode === 'chapter') {
     if (wasButtonPressed(0) || wasButtonPressed(1) || wasButtonPressed(9)) closeChapter();
@@ -11422,6 +11448,13 @@ canvas.addEventListener('pointerdown', (event) => {
     closeChapter();
     return;
   }
+  if (mode === 'paused') {
+    // Click the "Resume" line or the "Save and exit" line of the pause overlay.
+    const lineY = pointer.y - canvas.height / 2;
+    if (lineY >= -20 && lineY < 17) resumeGame();
+    else if (lineY >= 17 && lineY < 51) exitToTitle();
+    return;
+  }
   if (mode === 'select') {
     const codex = codexButtonBounds();
     if (pointer.x >= codex.x && pointer.x <= codex.x + codex.width &&
@@ -11455,11 +11488,6 @@ canvas.addEventListener('pointerdown', (event) => {
     if (pointer.x >= start.x && pointer.x <= start.x + start.width &&
       pointer.y >= start.y && pointer.y <= start.y + start.height) {
       beginRun();
-      return;
-    }
-    if (mode === 'paused') {
-      if (pointer.y < canvas.height / 2 + 14) resumeGame();
-      else exitToTitle();
       return;
     }
     const pageStart = Math.floor(selectedIndex / rosterPageSize) * rosterPageSize;
