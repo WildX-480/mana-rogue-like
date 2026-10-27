@@ -816,6 +816,12 @@ const streakCallout = { timer: 0, duration: 1.2, x: 0, y: 0, text: '' };
 let deathTimer = 0;
 // Recent messages drawn on the canvas, newest first.
 const messageToasts = [];
+// Tallies for the end-of-run summary; saved with the run.
+const runStats = { seconds: 0, kills: 0, guardians: 0, zennyFound: 0, lastHitBy: '', unlocked: [] };
+// Ignores input briefly when a run ends so a held or mashed key can't skip the summary.
+let endScreenDelay = 0;
+// Second press of Descend within this window replaces a saved run.
+let newRunConfirmTimer = 0;
 let coins = 0;
 let keysHeld = 0;
 let bombsHeld = 3;
@@ -1660,8 +1666,18 @@ function closeChapter() {
   updateHud();
 }
 
+function resetRunStats(saved = {}) {
+  runStats.seconds = Number(saved.seconds) || 0;
+  runStats.kills = Number(saved.kills) || 0;
+  runStats.guardians = Number(saved.guardians) || 0;
+  runStats.zennyFound = Number(saved.zennyFound) || 0;
+  runStats.lastHitBy = typeof saved.lastHitBy === 'string' ? saved.lastHitBy : '';
+  runStats.unlocked = Array.isArray(saved.unlocked) ? saved.unlocked.filter((id) => typeof id === 'string') : [];
+}
+
 function unlockCharacter(id) {
   if (save.unlockedCharacters.includes(id)) return false;
+  if (!runStats.unlocked.includes(id)) runStats.unlocked.push(id);
   save.unlockedCharacters.push(id);
   persistSave();
   queueChapter(`character:${id}`, characterChapters[id]);
@@ -1817,8 +1833,8 @@ function updateControlsHint() {
       : ['←/→ Change Page · H/ESC Back'];
   } else {
     lines = lastInputMode === 'controller'
-      ? ['D-Pad ←/→ Delver · ↑/↓ Menu · X Select · RB Codex · Y How to Play · Back Controls']
-      : ['←/→ Select · Enter Descend · K Codex · H How to Play · C Controls'];
+      ? ['D-Pad ←/→ Delver · ↑/↓ Menu · X Select · RB Codex · Y How to Play · Back Controls · LB Prologue']
+      : ['←/→ Select · Enter Descend · K Codex · H How to Play · C Controls · P Prologue'];
   }
   const hintText = lines.join('\n');
   if (controlsEl.textContent !== hintText) controlsEl.textContent = hintText;
@@ -2155,6 +2171,7 @@ function serializeRun() {
     consumables,
     companions: companions.map(({ enemyCooldowns, ...companion }) => companion),
     storyLog,
+    runStats: { ...runStats, unlocked: [...runStats.unlocked] },
   };
 }
 
@@ -2274,6 +2291,7 @@ function restoreRun() {
   deathTimer = 0;
   messageToasts.length = 0;
   player.knockback = null;
+  resetRunStats(saved.runStats);
   mode = 'playing';
   showMap = false;
   showStoryJournal = false;
@@ -2321,6 +2339,7 @@ function exitToTitle() {
   if (mode !== 'paused') return;
   saveRunState();
   mode = 'select';
+  menuFocus = defaultMenuFocus();
   messageTimer = 0;
   showMessage('Descent saved. Press R to resume or choose a new delver.', 5);
   updateHud();
@@ -3226,6 +3245,7 @@ function spawnRoom(room) {
     storyText = 'A sacred chamber, untouched for ages. Its relics hold a gift, but disturb them at your own risk.';
     if (!save.warden) {
       save.warden = true;
+      runStats.unlocked.push('warden');
       persistSave();
       queueChapter('character:warden', characterChapters.warden);
       showMessage('Secret found: Rogue is now selectable.', 4);
@@ -3285,6 +3305,7 @@ function beginRun() {
   hitStopTimer = 0;
   deathTimer = 0;
   messageToasts.length = 0;
+  resetRunStats();
   killStreak = 0;
   killStreakTimer = 0;
   streakCallout.timer = 0;
@@ -5289,13 +5310,18 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
   }
   if (enemy.hp <= 0) {
     score += enemy.boss ? 100 : 10;
+    runStats.kills += 1;
+    if (enemy.boss) runStats.guardians += 1;
     chargeStylesFromKill(enemy.boss ? 4 : enemy.miniBoss ? 2 : 1);
     onClassKill(enemy);
     killStreak = killStreakTimer > 0 ? killStreak + 1 : 1;
     killStreakTimer = 3.2;
     if (killStreak % 3 === 0) {
       const bonusCoin = reserveCoin();
-      if (bonusCoin) coins += 1;
+      if (bonusCoin) {
+        coins += 1;
+        runStats.zennyFound += 1;
+      }
       streakCallout.timer = streakCallout.duration;
       streakCallout.x = player.x;
       streakCallout.y = player.y - 42;
@@ -5335,6 +5361,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       groundHazards.length = 0;
       for (let i = bombs.length - 1; i >= 0; i--) if (bombs[i].owner === 'enemy') bombs.splice(i, 1);
       playSound('special/fanfare.ogg', 0.45);
+      if (!save.arcanist) runStats.unlocked.push('arcanist');
       save.arcanist = true;
       queueChapter('character:arcanist', characterChapters.arcanist);
       const unlockedId = ({
@@ -5514,6 +5541,7 @@ function interact(withdrawFromBank = false) {
     }
     if (currentFloor === finalFloor) {
       mode = 'won';
+      endScreenDelay = 0.6;
       save.completedRuns += 1;
       unlockCharacter('vault-delver');
       persistSave();
@@ -5957,6 +5985,14 @@ function nearestEnemyWithin(maxDistance) {
   return nearest;
 }
 
+function damageSourceName(origin) {
+  if (!origin) return 'a hazard';
+  if (origin.fuse !== undefined) return 'a bomb';
+  if (origin.title) return origin.title;
+  const kind = origin.ownerKind || origin.kind;
+  return monsterSprites[kind] ? monsterDisplayName(kind) : 'an enemy attack';
+}
+
 function knockPlayerBack(origin) {
   if (!origin) return;
   const dx = player.x - origin.x;
@@ -5991,6 +6027,7 @@ function damagePlayer(damageAmount = 1, source = null) {
   hitStopTimer = Math.max(hitStopTimer, 0.06);
   playSound('punch.ogg', 0.32);
   knockPlayerBack(origin);
+  runStats.lastHitBy = damageSourceName(origin);
   player.invuln = 0.9;
   if (player.hp <= 0) {
     // The run is lost now; a short slow-motion beat plays before the game-over screen.
@@ -6701,6 +6738,7 @@ function update(dt) {
     deathTimer = Math.max(0, deathTimer - dt);
     if (deathTimer === 0) {
       mode = 'gameover';
+      endScreenDelay = 0.6;
       showMessage('The sanctum claims another delver. Choose who descends next.', 5);
       updateHud();
       return;
@@ -6714,6 +6752,7 @@ function update(dt) {
   }
   if (mode === 'playing') {
     save.playtimeSeconds += dt;
+    runStats.seconds += dt;
     unlockPlaytimeItems();
     profileSaveTimer += dt;
     if (profileSaveTimer >= 10) {
@@ -7018,7 +7057,10 @@ function update(dt) {
       }
       if (pickup.room) pickup.room.rewardClaimed = true;
     }
-    if (pickup.kind === 'coin') coins += 1;
+    if (pickup.kind === 'coin') {
+      coins += 1;
+      runStats.zennyFound += 1;
+    }
     if (pickup.kind === 'heart') {
       player.hp = Math.min(player.maxHp, player.hp + 1);
       popOverPlayer({ icon: 'heart', color: '#ff7b8e' });
@@ -10147,7 +10189,47 @@ function moveMenuFocus(delta) {
 function activateMenuFocus() {
   if (menuFocus === 'resume' && hasSavedRun()) restoreRun();
   else if (menuFocus === 'reset') requestProgressReset();
-  else beginRun();
+  else requestNewRun();
+}
+
+function defaultMenuFocus() {
+  return hasSavedRun() ? 'resume' : 'start';
+}
+
+// Starting over replaces the saved descent, so that takes a second press.
+function requestNewRun() {
+  if (hasSavedRun() && isCharacterUnlocked(characterRoster[selectedIndex]) && newRunConfirmTimer <= 0) {
+    newRunConfirmTimer = 4;
+    showMessage('Start a new descent? Your saved descent will be lost. Select Descend again to confirm.', 4);
+    return;
+  }
+  newRunConfirmTimer = 0;
+  beginRun();
+}
+
+function openPrologue() {
+  if (mode !== 'select') return;
+  stopPrologueNarration();
+  prologuePage = 0;
+  mode = 'prologue';
+  updateHud();
+}
+
+// Below the music and effects controls on the delver ledger.
+function prologueReplayBounds() {
+  return { x: 24, y: 124, width: 170, height: 22 };
+}
+
+// In the margins beside the row of delver cards.
+function rosterPageButtonBounds(direction) {
+  return { x: direction < 0 ? 2 : canvas.width - 26, y: 247, width: 24, height: 44 };
+}
+
+function changeRosterPage(direction) {
+  const pageCount = Math.ceil(characterRoster.length / rosterPageSize);
+  const page = (Math.floor(selectedIndex / rosterPageSize) + direction + pageCount) % pageCount;
+  selectedIndex = page * rosterPageSize;
+  updateHud();
 }
 
 function resetButtonBounds() {
@@ -10258,7 +10340,13 @@ function advancePrologue(direction) {
   if (mode !== 'prologue' || ttsPromptActive()) return;
   if (direction > 0 && prologuePage === prologuePages.length - 1) {
     stopPrologueNarration();
+    // Later visits open on the delver ledger; the prologue stays available from there.
+    if (!save.introducedChapters.includes('prologue')) {
+      save.introducedChapters.push('prologue');
+      persistSave();
+    }
     mode = 'select';
+    menuFocus = defaultMenuFocus();
     updateHud();
     showMessage('Prologue complete. Choose a delver to begin.', 2.5);
     return;
@@ -10398,6 +10486,28 @@ function drawCharacterSelect() {
   const pageStart = Math.floor(selectedIndex / rosterPageSize) * rosterPageSize;
   const pageNumber = Math.floor(pageStart / rosterPageSize);
   ctx.fillText(`Page ${pageNumber + 1} / ${Math.ceil(characterRoster.length / rosterPageSize)}  •  ← / → selects delvers`, canvas.width / 2, 105);
+  for (const direction of [-1, 1]) {
+    const pageButton = rosterPageButtonBounds(direction);
+    ctx.fillStyle = pointInBounds(pageButton) ? '#52664f' : '#30443b';
+    ctx.fillRect(pageButton.x, pageButton.y, pageButton.width, pageButton.height);
+    ctx.strokeStyle = '#a5c79b';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pageButton.x, pageButton.y, pageButton.width, pageButton.height);
+    ctx.fillStyle = '#e4f0d7';
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText(direction < 0 ? '‹' : '›', pageButton.x + pageButton.width / 2, pageButton.y + 28);
+  }
+  const prologueButton = prologueReplayBounds();
+  ctx.fillStyle = pointInBounds(prologueButton) ? '#52664f' : '#30443b';
+  ctx.fillRect(prologueButton.x, prologueButton.y, prologueButton.width, prologueButton.height);
+  ctx.strokeStyle = '#a5c79b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(prologueButton.x, prologueButton.y, prologueButton.width, prologueButton.height);
+  ctx.fillStyle = '#e4f0d7';
+  ctx.font = 'bold 11px Arial';
+  ctx.fillText(lastInputMode === 'controller' ? 'PROLOGUE  [LB]' : 'PROLOGUE  [P]',
+    prologueButton.x + prologueButton.width / 2, prologueButton.y + 15);
+  ctx.font = '14px Arial';
   const codexButton = codexButtonBounds();
   ctx.fillStyle = pointer.x >= codexButton.x && pointer.x <= codexButton.x + codexButton.width &&
     pointer.y >= codexButton.y && pointer.y <= codexButton.y + codexButton.height ? '#52664f' : '#30443b';
@@ -10500,7 +10610,7 @@ function drawCharacterSelect() {
   ctx.strokeRect(start.x, start.y, start.width, start.height);
   ctx.fillStyle = '#fff0d1';
   ctx.font = 'bold 15px Arial';
-  ctx.fillText('DESCEND', canvas.width / 2, start.y + 25);
+  ctx.fillText(newRunConfirmTimer > 0 ? 'CONFIRM NEW DESCENT' : 'DESCEND', canvas.width / 2, start.y + 25);
   const focusBounds = { start, reset: resetButtonBounds(), resume: resumeRunBounds() }[menuFocus];
   if (lastInputMode === 'controller' && focusBounds && menuFocus !== 'resume') {
     ctx.strokeStyle = '#ffffff';
@@ -10994,16 +11104,67 @@ function drawTutorial() {
   ctx.fillText(pad ? `D-Pad ←/→ Page  ·  ${padLabels().b} Back` : '←/→ Page  ·  Esc Back', canvas.width / 2, 508);
 }
 
-function drawGameOver() {
-  ctx.fillStyle = 'rgba(10, 9, 14, 0.84)';
+function drawRunSummary(title) {
+  const centerX = canvas.width / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(10, 9, 14, 0.88)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#f1dec1';
   ctx.textAlign = 'center';
+  ctx.fillStyle = '#f1dec1';
   ctx.font = 'bold 38px Georgia';
-  ctx.fillText('THE SANCTUM CLAIMS YOU', canvas.width / 2, canvas.height / 2 - 24);
-  ctx.font = '18px Arial';
-  ctx.fillText(`Score ${score}  •  Floor ${currentFloor}`, canvas.width / 2, canvas.height / 2 + 14);
-  ctx.fillText('Press Enter to choose a delver', canvas.width / 2, canvas.height / 2 + 52);
+  ctx.fillText(title, centerX, 112);
+
+  const minutes = Math.floor(runStats.seconds / 60);
+  const seconds = String(Math.floor(runStats.seconds % 60)).padStart(2, '0');
+  const lines = [
+    `${character?.name || 'Delver'}  •  Level ${xpLevel}  •  Floor ${currentFloor} of ${finalFloor}  •  ${minutes}:${seconds}`,
+    `Score ${score}  •  Foes defeated ${runStats.kills}  •  Guardians ${runStats.guardians}  •  Zenny found ${runStats.zennyFound}`,
+  ];
+  if (mode === 'gameover' && runStats.lastHitBy) lines.push(`Last hit: ${runStats.lastHitBy}`);
+  ctx.font = '16px Arial';
+  lines.forEach((line, index) => ctx.fillText(line, centerX, 158 + index * 26));
+
+  const routeY = 158 + lines.length * 26 + 14;
+  ctx.fillStyle = '#c8cbbd';
+  ctx.font = '13px Arial';
+  const route = mapOrder.slice(0, currentFloor).map((id) => floorThemes[id]?.name || id).join('  →  ');
+  const routeLines = wrapCanvasText(route, centerX, routeY, 780, 18);
+
+  const items = shopItemCatalog.filter((item) => ownedItems.has(item.id));
+  const iconsY = routeY + routeLines * 18 + 34;
+  const perRow = 18;
+  items.forEach((item, index) => {
+    const row = Math.floor(index / perRow);
+    const rowCount = Math.min(perRow, items.length - row * perRow);
+    const x = centerX + (index % perRow - (rowCount - 1) / 2) * 36;
+    drawShopItemIcon(item, x, iconsY + row * 38);
+  });
+
+  const unlockedNames = runStats.unlocked
+    .map((id) => characterRoster.find((entry) => entry.id === id)?.name).filter(Boolean);
+  if (unlockedNames.length > 0) {
+    ctx.fillStyle = '#a8d39b';
+    ctx.font = 'bold 13px Arial';
+    ctx.textAlign = 'center';
+    wrapCanvasText(`Unlocked: ${unlockedNames.join(', ')}`, centerX, 440, 780, 18);
+  }
+
+  ctx.fillStyle = '#f1dec1';
+  ctx.font = '17px Arial';
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = endScreenDelay > 0 ? 0.35 : 1;
+  ctx.fillText(lastInputMode === 'controller' ? 'Press A to choose a delver'
+    : 'Press Enter or click to choose a delver', centerX, 500);
+  ctx.restore();
+}
+
+function returnToCharacterSelect() {
+  if (endScreenDelay > 0) return;
+  mode = 'select';
+  // Stay on the delver who just descended instead of jumping back to the first card.
+  selectedIndex = Math.max(0, characterRoster.indexOf(character));
+  menuFocus = defaultMenuFocus();
+  updateHud();
 }
 
 function draw() {
@@ -11050,17 +11211,8 @@ function draw() {
   if (showStoryJournal) drawStoryJournal();
   if (mode === 'paused') drawPauseOverlay();
   if (showMap) drawMap();
-  if (mode === 'gameover') drawGameOver();
-  if (mode === 'won') {
-    ctx.fillStyle = 'rgba(10, 9, 14, 0.84)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#f1dec1';
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 38px Georgia';
-    ctx.fillText('THE MANA FLOWS AGAIN', canvas.width / 2, canvas.height / 2 - 18);
-    ctx.font = '18px Arial';
-    ctx.fillText('Press Enter to return to character selection', canvas.width / 2, canvas.height / 2 + 28);
-  }
+  if (mode === 'gameover') drawRunSummary('THE SANCTUM CLAIMS YOU');
+  if (mode === 'won') drawRunSummary('THE MANA FLOWS AGAIN');
 
   function drawPauseOverlay() {
     ctx.fillStyle = 'rgba(10, 9, 14, 0.82)';
@@ -11153,6 +11305,8 @@ function loop(timestamp) {
   lastTime = timestamp;
   if (document.visibilityState === 'visible') updateQuality(dt);
   resetConfirmTimer = Math.max(0, resetConfirmTimer - dt);
+  newRunConfirmTimer = Math.max(0, newRunConfirmTimer - dt);
+  endScreenDelay = Math.max(0, endScreenDelay - dt);
   if (chapterQueue.length > 0 && !activeChapter && (mode === 'select' ||
       (mode === 'playing' && enemies.length === 0 && !showMap && !showStoryJournal))) {
     openChapter();
@@ -11263,6 +11417,7 @@ function pollGamepad() {
     if (wasButtonPressed(5)) openCodex();
     if (wasButtonPressed(3)) openTutorial();
     if (wasButtonPressed(8)) openControls('select');
+    if (wasButtonPressed(4)) openPrologue();
   } else if (mode === 'tutorial') {
     if (wasButtonPressed(1) || wasButtonPressed(9)) closeTutorial();
     if (wasButtonPressed(0) || wasButtonPressed(5)) stepTutorial(1);
@@ -11282,11 +11437,7 @@ function pollGamepad() {
     else if (wasButtonPressed(1)) exitToTitle();
     else if (wasButtonPressed(8)) openControls('paused');
   } else if (mode === 'gameover' || mode === 'won') {
-    if (wasButtonPressed(0) || wasButtonPressed(9)) {
-      mode = 'select';
-      selectedIndex = 0;
-      updateHud();
-    }
+    if (wasButtonPressed(0) || wasButtonPressed(9)) returnToCharacterSelect();
   } else if (mode === 'playing') {
     if (wasButtonPressed(9)) pauseGame();
     for (let button = 0; button < 16; button += 1) {
@@ -11404,20 +11555,13 @@ window.addEventListener('keydown', (event) => {
     if (key === 'k') openCodex();
     if (key === 'h') openTutorial();
     if (key === 'c') openControls('select');
+    if (key === 'p') openPrologue();
     if (event.key === 'Delete') requestProgressReset();
-    if (event.key === 'Enter') beginRun();
+    if (event.key === 'Enter') requestNewRun();
     return;
   }
-  if (mode === 'gameover' && event.key === 'Enter') {
-    mode = 'select';
-    selectedIndex = 0;
-    updateHud();
-    return;
-  }
-  if (mode === 'won' && event.key === 'Enter') {
-    mode = 'select';
-    selectedIndex = 0;
-    updateHud();
+  if ((mode === 'gameover' || mode === 'won') && event.key === 'Enter') {
+    returnToCharacterSelect();
     return;
   }
   const keyAction = actionForKey(key);
@@ -11484,7 +11628,9 @@ function updatePointerPosition(event) {
     const codex = codexButtonBounds();
     const overCodex = pointer.x >= codex.x && pointer.x <= codex.x + codex.width &&
       pointer.y >= codex.y && pointer.y <= codex.y + codex.height;
-    canvas.style.cursor = overCard || overStart || overCodex ? 'pointer' : 'default';
+    const overButton = pointInBounds(prologueReplayBounds()) ||
+      [-1, 1].some((direction) => pointInBounds(rosterPageButtonBounds(direction)));
+    canvas.style.cursor = overCard || overStart || overCodex || overButton ? 'pointer' : 'default';
   } else {
     canvas.style.cursor = 'crosshair';
   }
@@ -11569,7 +11715,21 @@ canvas.addEventListener('pointerdown', (event) => {
     else if (lineY >= 17 && lineY < 51) exitToTitle();
     return;
   }
+  if (mode === 'gameover' || mode === 'won') {
+    returnToCharacterSelect();
+    return;
+  }
   if (mode === 'select') {
+    if (pointInBounds(prologueReplayBounds())) {
+      openPrologue();
+      return;
+    }
+    for (const direction of [-1, 1]) {
+      if (pointInBounds(rosterPageButtonBounds(direction))) {
+        changeRosterPage(direction);
+        return;
+      }
+    }
     const codex = codexButtonBounds();
     if (pointer.x >= codex.x && pointer.x <= codex.x + codex.width &&
         pointer.y >= codex.y && pointer.y <= codex.y + codex.height) {
@@ -11601,7 +11761,7 @@ canvas.addEventListener('pointerdown', (event) => {
     const start = characterStartBounds();
     if (pointer.x >= start.x && pointer.x <= start.x + start.width &&
       pointer.y >= start.y && pointer.y <= start.y + start.height) {
-      beginRun();
+      requestNewRun();
       return;
     }
     const pageStart = Math.floor(selectedIndex / rosterPageSize) * rosterPageSize;
@@ -11631,11 +11791,22 @@ canvas.addEventListener('lostpointercapture', () => {
   pointer.down = false;
 });
 
+// The prologue opens the game until it has been read once.
+if (save.introducedChapters.includes('prologue')) {
+  mode = 'select';
+  menuFocus = defaultMenuFocus();
+}
 updateHud();
-messageEl.textContent = hasSavedRun()
-  ? 'Read the prologue before choosing a delver or resuming your saved descent.'
-  : 'Read the prologue before choosing a delver.';
-startPrologueNarration();
+if (mode === 'prologue') {
+  messageEl.textContent = hasSavedRun()
+    ? 'Read the prologue before choosing a delver or resuming your saved descent.'
+    : 'Read the prologue before choosing a delver.';
+  startPrologueNarration();
+} else {
+  messageEl.textContent = hasSavedRun()
+    ? 'Resume your saved descent or choose a delver.'
+    : 'Choose a delver to begin the descent.';
+}
 window.addEventListener('pagehide', () => {
   persistSave();
   saveRunState();
