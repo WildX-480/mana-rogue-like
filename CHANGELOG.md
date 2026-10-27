@@ -84,7 +84,9 @@ Built on the 2026-10-26 overhaul (`8ae8751`, "added some polish"). Covers commit
   - A matched mob without a cue keeps the old one. Hit and dodge fall back to SoM's shared `alteration/hit` and `alteration/dodge` for every other enemy; attack and death keep the TMW cues.
   - The Great Red Slime (`slime-mother`) keeps its TMW roar and super-slime death cue.
   - Enemies now play a hit cue when damaged (140 ms per-enemy gap) and a dodge cue when they sidestep a shot.
-  - `enemyDeathSounds` only holds species with no SoM death cue.
+  - `tmwEnemySounds` gives species with no SoM counterpart their own TMW attack, hurt and death cues: zombie, spider and Spider Queen, bee, yeti and Yeti King, snowmen, golem, reaper, jacko, dragons, frostiana, wisp and the Great Red Slime. `enemySound(enemy, event)` picks the SoM cue, then the TMW cue, then the shared fallback. It replaces `enemyDeathSounds` and `somEnemySound`.
+- Breakable obstacles play TMW hit and break sounds (`sound` on each `obstacleSprites` entry, played from `damageObstacle`). The cactus and plant sounds are loose matches.
+- Bombs use `system/boom.ogg`, descending a floor plays `system/warp.ogg`, and buying a non-upgrade shop item plays `system/item.ogg`.
 - Non-enemy cues from SoM's `alteration` set: level up, upgrade gained (`skillup`), guardian defeated (`quest-done`), room cleared (`quest-update`), coin, heart and XP pickups (throttled by `playPickupSound`), and a key opening a door (`chest/open`). The level-up and guardian-defeated cues replace the TMW fanfare.
 - `playSound` paths starting with `som:` load from `assets/som/sounds`. The files and their credits are in `assets/som` (CC BY-SA 4.0).
 

@@ -299,19 +299,46 @@ const somMobByEnemy = {
 // As in SoM, any mob without its own hit or dodge cue uses the shared one.
 const somSharedEnemySounds = { hit: 'som:alteration/hit.ogg', dodge: 'som:alteration/dodge.ogg' };
 
-function somEnemySound(enemy, event) {
+// TMW cues for species with no Source of Mana equivalent: attack is the swing, hit is the hurt cue.
+const tmwSpecies = (attack, hit, death) => ({ attack, hit, death });
+const tmwEnemySounds = {
+  zombie: tmwSpecies('monsters/zombie/zombie-miss1.ogg', null, 'monsters/zombie/zombie-dying1.ogg'),
+  spider: tmwSpecies('monsters/spider/spider-hit1.ogg', null, 'monsters/spider/spider-die1.ogg'),
+  'spider-queen': tmwSpecies('monsters/spider/spider-hit1.ogg'),
+  bee: tmwSpecies('monsters/bee/bee-miss1.ogg', 'monsters/bee/hurt.ogg', 'monsters/bee/bee-die1.ogg'),
+  yeti: tmwSpecies('monsters/yeti/yeti-miss1.ogg', 'monsters/yeti/yeti-hurt1.ogg', 'monsters/yeti/yeti-die1.ogg'),
+  yetiking: tmwSpecies('monsters/yeti/yeti-miss1.ogg', 'monsters/yeti/yeti-hurt1.ogg', 'monsters/yeti/yeti-die1.ogg'),
+  snowman: tmwSpecies('monsters/snowman_boss/miss1.ogg'),
+  'snowman-boss': tmwSpecies('monsters/snowman_boss/miss1.ogg'),
+  golem: tmwSpecies('monsters/golem/miss1.ogg', null, 'monsters/golem/die.ogg'),
+  reaper: tmwSpecies('monsters/reaper/reaper-hit1.ogg', 'monsters/reaper/reaper-hurt1.ogg', 'monsters/reaper/reaper-die1.ogg'),
+  jacko: tmwSpecies(null, null, 'monsters/pumpkin/die1.ogg'),
+  forestdragon: tmwSpecies('monsters/dragon/hit.ogg', null, 'monsters/dragon/die.ogg'),
+  nightdragon: tmwSpecies('monsters/dragon/hit.ogg', null, 'monsters/dragon/die.ogg'),
+  frostiana: tmwSpecies('monsters/frostiana/hit1.ogg'),
+  'slime-mother': tmwSpecies(null, 'monsters/slime-super/slime-super-hurt1.ogg', 'monsters/slime-super/slime-super-die1.ogg'),
+  wisp: tmwSpecies(null, null, 'monsters/ghost/ghost-die1.ogg'),
+};
+
+// Source of Mana's cue for the species, else its TMW cue, else the shared hit/dodge cue.
+// Attack and death return null when nothing matches so the caller's generic cue plays.
+function enemySound(enemy, event) {
   const mob = somMobByEnemy[enemy.kind];
   if (mob && somMobEvents[mob].includes(event)) return `som:entities/${mob}/${event}.ogg`;
-  return somSharedEnemySounds[event] || null;
+  return tmwEnemySounds[enemy.kind]?.[event] || somSharedEnemySounds[event] || null;
 }
 
-// Pickups can arrive in clusters, so each cue has a minimum gap between plays.
-const pickupSoundTimes = new Map();
-function playPickupSound(name, volume, minGapMs = 70) {
+// Pickups and obstacle hits can arrive in clusters, so each cue has a minimum gap between plays.
+const throttledSoundTimes = new Map();
+function playThrottledSound(path, volume, minGapMs = 70) {
   const now = performance.now();
-  if (now - (pickupSoundTimes.get(name) || 0) < minGapMs) return;
-  pickupSoundTimes.set(name, now);
-  playSound(`som:alteration/${name}.ogg`, volume);
+  if (now - (throttledSoundTimes.get(path) || 0) < minGapMs) return;
+  throttledSoundTimes.set(path, now);
+  playSound(path, volume);
+}
+
+function playPickupSound(name, volume, minGapMs = 70) {
+  playThrottledSound(`som:alteration/${name}.ogg`, volume, minGapMs);
 }
 
 function scheduleMusicNote(midiNote, startTime, duration, volume, waveform) {
@@ -647,11 +674,16 @@ const monsterSprites = {
 };
 const banditBowImage = loadAsset('sprites/monsters/accessories/banditbow.png');
 const obstacleSprites = [
-  { image: loadAsset('sprites/monsters/loghead.png'), frameWidth: 45, frameHeight: 43, frames: [0], scale: 1.55, hp: 1, radius: 23, type: 'solid' },
-  { image: loadAsset('sprites/monsters/redmushroom.png'), frameWidth: 42, frameHeight: 33, frames: [0, 10, 20, 30], scale: 1.55, hp: 2, radius: 18, type: 'bomb-only' },
-  { image: loadAsset('sprites/monsters/forestmushroom.png'), frameWidth: 42, frameHeight: 40, frames: [0], scale: 1.35, hp: 3, radius: 15, type: 'regenerating', regenDelay: 4, regenCycles: 2, regenSteps: 3 },
-  { image: desertObstacleTiles, frameWidth: 32, frameHeight: 32, frames: [27], scale: 1.6, hp: 2, radius: 18, type: 'bomb-only' },
-  { image: loadAsset('sprites/monsters/plant.png'), frameWidth: 46, frameHeight: 42, frames: [0], scale: 1.3, hp: 3, radius: 18, type: 'regenerating', regenDelay: 4, regenCycles: 2, regenSteps: 3 },
+  { image: loadAsset('sprites/monsters/loghead.png'), frameWidth: 45, frameHeight: 43, frames: [0], scale: 1.55, hp: 1, radius: 23, type: 'solid',
+    sound: { hit: 'monsters/loghead/loghead-hurt1.ogg', break: 'monsters/loghead/loghead-die1.ogg' } },
+  { image: loadAsset('sprites/monsters/redmushroom.png'), frameWidth: 42, frameHeight: 33, frames: [0, 10, 20, 30], scale: 1.55, hp: 2, radius: 18, type: 'bomb-only',
+    sound: { hit: 'monsters/shroom/shroom-hurt1.ogg', break: 'monsters/shroom/shroom-die1.ogg' } },
+  { image: loadAsset('sprites/monsters/forestmushroom.png'), frameWidth: 42, frameHeight: 40, frames: [0], scale: 1.35, hp: 3, radius: 15, type: 'regenerating', regenDelay: 4, regenCycles: 2, regenSteps: 3,
+    sound: { hit: 'monsters/shroom/shroom-hurt1.ogg', break: 'monsters/shroom/shroom-die1.ogg' } },
+  { image: desertObstacleTiles, frameWidth: 32, frameHeight: 32, frames: [27], scale: 1.6, hp: 2, radius: 18, type: 'bomb-only',
+    sound: { hit: 'monsters/crocotree/hurt1.ogg', break: 'monsters/crocotree/die1.ogg' } },
+  { image: loadAsset('sprites/monsters/plant.png'), frameWidth: 46, frameHeight: 42, frames: [0], scale: 1.3, hp: 3, radius: 18, type: 'regenerating', regenDelay: 4, regenCycles: 2, regenSteps: 3,
+    sound: { hit: 'monsters/flower/flower-hit1.ogg', break: 'monsters/crocotree/die1.ogg' } },
 ];
 // Obstacle sets follow the region's ground: desert cactus only in dry regions, plants in wooded ones.
 const obstacleSpritesByRegion = {
@@ -2828,7 +2860,12 @@ function damageObstacle(obstacle, damage = 1, source = 'projectile') {
   if (obstacle.type === 'solid' || (obstacle.type === 'bomb-only' && source !== 'bomb')) return;
   obstacle.hp -= damage;
   obstacle.regenTimer = obstacle.regenerating ? 0.65 : obstacle.regenTimer;
-  if (obstacle.hp > 0) return;
+  const obstacleSound = obstacle.sprite?.sound;
+  if (obstacle.hp > 0) {
+    if (obstacleSound) playThrottledSound(obstacleSound.hit, 0.2, 80);
+    return;
+  }
+  if (obstacleSound) playSound(obstacleSound.break, 0.3);
 
   if (!obstacle.dropConsumed) {
     obstacle.dropConsumed = true;
@@ -4079,9 +4116,9 @@ function addParticles(x, y, color, count = 4, speed = 80) {
 }
 
 function playEnemyAttackSound(enemy, volume = enemy.boss ? 0.3 : 0.14) {
-  const somAttack = somEnemySound(enemy, 'attack');
-  if (somAttack) {
-    playSound(somAttack, volume);
+  const attackSound = enemySound(enemy, 'attack');
+  if (attackSound) {
+    playSound(attackSound, volume);
   } else if (enemy.boss) {
     playSound(enemy.kind === 'jacko' ? 'monsters/pumpkin/hit1.ogg' : 'ML/Roar.ogg', volume);
   } else {
@@ -5285,21 +5322,6 @@ function spawnEnemyOffspring(enemy) {
   }
 }
 
-// Species with a TMW death sound and no Source of Mana equivalent (see somEnemySound); everything else uses the zombie cry.
-const enemyDeathSounds = {
-  bee: 'monsters/bee/bee-die1.ogg',
-  wisp: 'monsters/ghost/ghost-die1.ogg',
-  spider: 'monsters/spider/spider-die1.ogg',
-  yeti: 'monsters/yeti/yeti-die1.ogg',
-  jacko: 'monsters/pumpkin/die1.ogg',
-  'slime-mother': 'monsters/slime-super/slime-super-die1.ogg',
-  reaper: 'monsters/reaper/reaper-die1.ogg',
-  golem: 'monsters/golem/die.ogg',
-  yetiking: 'monsters/yeti/yeti-die1.ogg',
-  forestdragon: 'monsters/dragon/die.ogg',
-  nightdragon: 'monsters/dragon/die.ogg',
-};
-
 function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, ignoreFirstHitCap = false) {
   if (damage > 0) damage = Math.max(1, Math.round(damage * curioMultiplier('damage')));
   if (enemy.linkId && enemy.linkShieldCharges > 0) {
@@ -5324,7 +5346,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
   enemy.hp -= damage;
   enemy.hitFlash = 0.16;
   const hitSound = enemy.hp > 0 && damage > 0 && !(enemy.hitSoundUntil > performance.now())
-    ? somEnemySound(enemy, 'hit') : null;
+    ? enemySound(enemy, 'hit') : null;
   if (hitSound) {
     enemy.hitSoundUntil = performance.now() + 140;
     playSound(hitSound, enemy.boss ? 0.2 : 0.16);
@@ -5374,7 +5396,7 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
       addParticles(enemy.x, enemy.y, '#ffe08b', 8, 95);
       playSound('special/fanfare.ogg', 0.12);
     }
-    playSound(somEnemySound(enemy, 'death') || enemyDeathSounds[enemy.kind] || 'monsters/zombie/zombiedie.ogg',
+    playSound(enemySound(enemy, 'death') || 'monsters/zombie/zombiedie.ogg',
       enemy.boss ? 0.65 : 0.38);
     addParticles(enemy.x, enemy.y, enemy.color, enemy.boss ? 36 : 14, enemy.boss ? 190 : 120);
     if (enemy.boss || enemy.miniBoss) triggerCameraShake('bomb');
@@ -5448,7 +5470,7 @@ function placeBomb() {
 
 function explodeBomb(bomb) {
   triggerCameraShake('bomb');
-  playSound('special/nature-thunder.ogg', bomb.owner === 'enemy' ? 0.32 : 0.55);
+  playSound('system/boom.ogg', bomb.owner === 'enemy' ? 0.32 : 0.55);
   const hurtByBlast = (target) => distanceBetween(bomb, target) <= bomb.radius && hasLineOfSight(bomb, target);
   if (hurtByBlast(player)) damagePlayer(3, bomb);
   if (bomb.owner !== 'enemy') {
@@ -5596,6 +5618,7 @@ function interact(withdrawFromBank = false) {
       return;
     }
     currentFloor += 1;
+    playSound('system/warp.ogg', 0.3);
     blanksHeld += 1;
     if (currentRegionId() === 'hurnscald' && unlockCharacter('hurnscald-herbalist')) {
       showMessage('Unlocked: Hurnscald Herbalist.', 3);
@@ -5698,7 +5721,10 @@ function buyShopItem(index) {
   }
   coins -= item.cost;
   item.purchased = true;
-  if (['passive', 'skill', 'weapon', 'mod', 'curio', 'clothing', 'ability', 'element'].includes(item.kind)) {
+  const grantsUpgrade = ['passive', 'skill', 'weapon', 'mod', 'curio', 'clothing', 'ability', 'element'].includes(item.kind);
+  // Upgrades already play their own cue in grantUpgrade.
+  if (!grantsUpgrade) playSound('system/item.ogg', 0.3);
+  if (grantsUpgrade) {
     if (!grantUpgrade(item, 'shop')) {
       coins += item.cost;
       item.purchased = false;
@@ -6173,7 +6199,7 @@ function applyMobTactics(enemy, dt, directionX, directionY, distance) {
       enemy.dodgeX = (-shot.vy / shotSpeed) * sign;
       enemy.dodgeY = (shot.vx / shotSpeed) * sign;
       enemy.dodgeTimer = 0.16;
-      playSound(somEnemySound(enemy, 'dodge'), 0.14);
+      playSound(enemySound(enemy, 'dodge'), 0.14);
       addParticles(enemy.x, enemy.y, '#ffffff', 3, 40);
       return true;
     }
