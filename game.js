@@ -610,11 +610,23 @@ const obstacleSprites = [
   { image: desertObstacleTiles, frameWidth: 32, frameHeight: 32, frames: [27], scale: 1.6, hp: 2, radius: 18, type: 'bomb-only' },
   { image: loadAsset('sprites/monsters/plant.png'), frameWidth: 46, frameHeight: 42, frames: [0], scale: 1.3, hp: 3, radius: 18, type: 'regenerating', regenDelay: 4, regenCycles: 2, regenSteps: 3 },
 ];
-const obstacleSpritesByFloor = {
-  1: [obstacleSprites[1], obstacleSprites[2], obstacleSprites[3]],
-  2: [obstacleSprites[0], obstacleSprites[2], obstacleSprites[4]],
-  3: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[4]],
+// Obstacle sets follow the region's ground: desert cactus only in dry regions, plants in wooded ones.
+const obstacleSpritesByRegion = {
+  tulimshar: [obstacleSprites[1], obstacleSprites[2], obstacleSprites[3]],
+  halinarzo: [obstacleSprites[0], obstacleSprites[2], obstacleSprites[3]],
+  artis: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[3]],
+  hurnscald: [obstacleSprites[0], obstacleSprites[2], obstacleSprites[4]],
+  fortress: [obstacleSprites[0], obstacleSprites[2], obstacleSprites[4]],
+  candor: [obstacleSprites[0], obstacleSprites[2], obstacleSprites[4]],
+  graveyard: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[4]],
+  nivalis: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[4]],
+  frostia: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[4]],
+  worldedge: [obstacleSprites[0], obstacleSprites[1], obstacleSprites[4]],
 };
+
+function regionObstacleSprites() {
+  return obstacleSpritesByRegion[currentRegionId()] || obstacleSpritesByRegion.tulimshar;
+}
 const correctedHumanoidFrames = new WeakMap();
 const correctedHeadFrames = new WeakMap();
 let pixelCorrectionWarningShown = false;
@@ -1856,8 +1868,13 @@ const BASE_HEARTS = 4;
 const MAX_EXTRA_HEARTS = 9;
 const SOFT_EXTRA_HEARTS = 5;
 
+// Roster health (3–12) maps onto 3–6 starting hearts.
+function startingHearts(entry) {
+  return clamp(Math.round(2 + (entry.hp || 6) / 3), 3, 6);
+}
+
 function extraHearts() {
-  return Math.max(0, player.maxHp - BASE_HEARTS);
+  return Math.max(0, player.maxHp - (character ? startingHearts(character) : BASE_HEARTS));
 }
 
 function gainMaxHeart() {
@@ -2206,7 +2223,7 @@ function restoreRun() {
   storyLog.push(...(Array.isArray(saved.storyLog) ? saved.storyLog.filter((entry) =>
     typeof entry?.title === 'string' && typeof entry?.text === 'string') : []));
   Object.assign(player, saved.player);
-  player.maxHp = clamp(player.maxHp, 1, BASE_HEARTS + MAX_EXTRA_HEARTS);
+  player.maxHp = clamp(player.maxHp, 1, startingHearts(character) + MAX_EXTRA_HEARTS);
   player.hp = Math.min(player.hp, player.maxHp);
   score = saved.score || 0;
   coins = saved.coins || 0;
@@ -2673,7 +2690,7 @@ function placeRoomObstacles(room) {
   } else if (roll < 0.5) {
     spots.push([0.3, 0.3, solid], [0.7, 0.7, solid]);
   }
-  const cachePool = (obstacleSpritesByFloor[currentFloor] || obstacleSpritesByFloor[3])
+  const cachePool = regionObstacleSprites()
     .filter((sprite) => sprite.type === 'bomb-only');
   if (cachePool.length && Math.random() < 0.35) {
     const cornerX = Math.random() < 0.5 ? 0.1 : 0.9;
@@ -2694,7 +2711,7 @@ function placeRoomObstacles(room) {
 
 function spawnRewardRelics(room, count = 3) {
   if (room.treasureClaimed || !room.rewardRoom) return;
-  const availableObstacles = obstacleSpritesByFloor[currentFloor] || obstacleSpritesByFloor[3];
+  const availableObstacles = regionObstacleSprites();
   const guaranteedSprite = availableObstacles.find((sprite) =>
     sprite.type !== 'solid' && sprite.type !== 'bomb-only',
   ) || availableObstacles.find((sprite) => sprite.type !== 'solid');
@@ -3233,8 +3250,8 @@ function beginRun() {
   runProgressionSnapshot = createRunProgressionSnapshot();
   storyLog.length = 0;
   canvas.style.cursor = 'crosshair';
-  player.maxHp = 4;
-  player.hp = 4;
+  player.maxHp = startingHearts(entry);
+  player.hp = player.maxHp;
   player.speed = entry.speed;
   player.damage = entry.damage;
   player.armor = 0;
@@ -10338,7 +10355,7 @@ function drawCharacterSelect() {
     ctx.fillText(`${entry.className}  •  ${entry.styleLabel}`, x, y + 67);
     const profile = characterProfile(entry);
     const rating = (value) => (value >= 1.3 ? '★★★' : value >= 1.1 ? '★★' : value >= 0.95 ? '★' : '·');
-    ctx.fillText(`HP 4  •  DMG ${entry.damage}  •  ${(classProfiles[entry.className]?.pool ?? 30)} ${entry.startingStyle === 'magic' ? 'MANA' : entry.startingStyle === 'bow' ? 'ARROWS' : 'STAMINA'}`, x, y + 84);
+    ctx.fillText(`HP ${startingHearts(entry)}  •  DMG ${entry.damage}  •  ${(classProfiles[entry.className]?.pool ?? 30)} ${entry.startingStyle === 'magic' ? 'MANA' : entry.startingStyle === 'bow' ? 'ARROWS' : 'STAMINA'}`, x, y + 84);
     ctx.font = '10px Arial';
     ctx.fillText(`⚔${rating(profile.melee)} 🏹${rating(Math.max(profile.bow, profile.bowRate))} ✦${rating(profile.magic)}`, x, y + 98);
     ctx.font = '11px Arial';
