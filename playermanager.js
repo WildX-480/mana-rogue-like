@@ -420,7 +420,7 @@ function reservedAbilityCount() {
 }
 
 function extraHearts() {
-  return Math.max(0, player.maxHp - BASE_HEARTS);
+  return Math.max(0, player.maxHp - (character ? startingHearts(character) : BASE_HEARTS));
 }
 
 function gainMaxHeart() {

@@ -400,7 +400,7 @@ function restoreRun() {
   storyLog.push(...(Array.isArray(saved.storyLog) ? saved.storyLog.filter((entry) =>
     typeof entry?.title === 'string' && typeof entry?.text === 'string') : []));
   Object.assign(player, saved.player);
-  player.maxHp = clamp(player.maxHp, 1, BASE_HEARTS + MAX_EXTRA_HEARTS);
+  player.maxHp = clamp(player.maxHp, 1, startingHearts(character) + MAX_EXTRA_HEARTS);
   player.hp = Math.min(player.hp, player.maxHp);
   score = saved.score || 0;
   coins = saved.coins || 0;

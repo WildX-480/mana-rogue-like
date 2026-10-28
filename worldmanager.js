@@ -482,7 +482,7 @@ function placeRoomObstacles(room) {
   } else if (roll < 0.5) {
     spots.push([0.3, 0.3, solid], [0.7, 0.7, solid]);
   }
-  const cachePool = (obstacleSpritesByFloor[currentFloor] || obstacleSpritesByFloor[3])
+  const cachePool = regionObstacleSprites()
     .filter((sprite) => sprite.type === 'bomb-only');
   if (cachePool.length && Math.random() < 0.35) {
     const cornerX = Math.random() < 0.5 ? 0.1 : 0.9;
@@ -503,7 +503,7 @@ function placeRoomObstacles(room) {
 
 function spawnRewardRelics(room, count = 3) {
   if (room.treasureClaimed || !room.rewardRoom) return;
-  const availableObstacles = obstacleSpritesByFloor[currentFloor] || obstacleSpritesByFloor[3];
+  const availableObstacles = regionObstacleSprites();
   const guaranteedSprite = availableObstacles.find((sprite) =>
     sprite.type !== 'solid' && sprite.type !== 'bomb-only',
   ) || availableObstacles.find((sprite) => sprite.type !== 'solid');
