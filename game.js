@@ -917,7 +917,12 @@ function pauseGame() {
   pointer.down = false;
   saveRunState();
   mode = 'paused';
-  showMessage('Paused. Press Start/A to resume or B to save and exit.', 9999);
+  const labels = pauseControlLabels();
+  showMessage(`Paused. Press ${labels.resume} to resume or ${labels.exit} to save and exit.`, 9999);
+}
+
+function pauseControlLabels() {
+  return lastInputMode === 'controller' ? { resume: 'Start/A', exit: 'B' } : { resume: 'P or R', exit: 'X' };
 }
 
 function resumeGame() {
@@ -1611,6 +1616,7 @@ function update(dt) {
       enemyProjectiles.splice(i, 1);
     } else if (hitsPlayer) {
       damagePlayer(0.5, projectile);
+      enemyProjectiles.splice(i, 1);
     } else if (projectileExpired) {
       enemyProjectiles.splice(i, 1);
     }
@@ -1638,9 +1644,21 @@ function update(dt) {
         continue;
       }
     }
-    if (distanceBetween(player, pickup) > player.radius + 14) continue;
+    if (distanceBetween(player, pickup) > player.radius + 14) {
+      pickup.refused = false;
+      continue;
+    }
     if (pickup.kind === 'heart' && player.hp >= player.maxHp) continue;
     if (pickup.kind === 'xp') gainXp(1);
+    if (pickup.kind === 'upgrade') {
+      // A refused upgrade stays on the floor; it is offered again once the player steps off it.
+      if (pickup.refused) continue;
+      if (!grantUpgrade(pickup.item)) {
+        pickup.refused = true;
+        continue;
+      }
+      if (pickup.room) pickup.room.rewardClaimed = true;
+    }
     if (pickup.kind === 'coin') coins += 1;
     if (pickup.kind === 'heart') {
       player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -1663,13 +1681,13 @@ function update(dt) {
         pickups.splice(i, 1);
         continue;
       }
-      if (!grantUpgrade(pickup.item, 'drop')) continue;
+      if (pickup.refused) continue;
+      if (!grantUpgrade(pickup.item, 'drop')) {
+        pickup.refused = true;
+        continue;
+      }
     }
     if (pickup.guaranteedTreasure && pickup.room) pickup.room.treasureClaimed = true;
-    if (pickup.kind === 'upgrade') {
-      pickup.room.rewardClaimed = true;
-      grantUpgrade(pickup.item);
-    }
     pickups.splice(i, 1);
     updateHud();
   }
@@ -1697,15 +1715,7 @@ function update(dt) {
 
   if (enemies.length === 0 && !currentRoom.cleared && currentRoom.type !== 'start' && currentRoom.type !== 'shop') {
     currentRoom.cleared = true;
-    if (['miniboss', 'shrine'].includes(currentRoom.type) && currentRoom.rewardUpgrade && !currentRoom.rewardClaimed) {
-      pickups.push({
-        x: ROOM_W / 2,
-        y: ROOM_H / 2,
-        kind: 'upgrade',
-        item: currentRoom.rewardUpgrade,
-        room: currentRoom,
-      });
-    }
+    if (['miniboss', 'shrine'].includes(currentRoom.type)) addRoomRewardPickup(currentRoom);
     if (currentRoom.type === 'boss') {
       showMessage('The guardian is defeated. The seal opens; the descent continues.', 5);
     } else {
@@ -2120,8 +2130,8 @@ function pollGamepad() {
   } else if (mode === 'codex') {
     if (wasButtonPressed(0) || wasButtonPressed(1) || wasButtonPressed(9)) closeCodex();
     if (wasButtonPressed(4) || wasButtonPressed(5)) toggleCodexTab();
-    if (dpadY !== 0) {
-      codexScroll = clamp(codexScroll + (dpadY > 0 ? 1 : -1), 0, Math.max(0, codexEntries().length - 7));
+    if (wasButtonPressed(12) || wasButtonPressed(13)) {
+      codexScroll = clamp(codexScroll + (wasButtonPressed(13) ? 1 : -1), 0, Math.max(0, codexEntries().length - 7));
     }
   } else if (mode === 'chapter') {
     if (wasButtonPressed(0) || wasButtonPressed(1) || wasButtonPressed(9)) closeChapter();
@@ -2431,6 +2441,13 @@ canvas.addEventListener('pointerdown', (event) => {
     closeChapter();
     return;
   }
+  if (mode === 'paused') {
+    // Click the "Resume" line or the "Save and exit" line of the pause overlay.
+    const lineY = pointer.y - canvas.height / 2;
+    if (lineY >= -20 && lineY < 17) resumeGame();
+    else if (lineY >= 17 && lineY < 51) exitToTitle();
+    return;
+  }
   if (mode === 'select') {
     if (pointInBounds(helpButtonBounds())) {
       toggleControlsHelp();
@@ -2468,11 +2485,6 @@ canvas.addEventListener('pointerdown', (event) => {
     if (pointer.x >= start.x && pointer.x <= start.x + start.width &&
       pointer.y >= start.y && pointer.y <= start.y + start.height) {
       beginRun();
-      return;
-    }
-    if (mode === 'paused') {
-      if (pointer.y < canvas.height / 2 + 14) resumeGame();
-      else exitToTitle();
       return;
     }
     const pageStart = Math.floor(selectedIndex / rosterPageSize) * rosterPageSize;
