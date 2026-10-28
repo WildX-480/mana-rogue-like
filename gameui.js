@@ -4125,7 +4125,6 @@ function drawCharacterSelect() {
   ctx.fillStyle = '#fff0d1';
   ctx.font = 'bold 15px Arial';
   ctx.fillText(newRunConfirmTimer > 0 ? 'CONFIRM NEW DESCENT' : 'DESCEND', VIEW_W / 2, start.y + 25);
-  const focusBounds = { start, reset: resetButtonBounds(), resume: resumeRunBounds() }[menuFocus];
   const focusBounds = {
     start,
     reset: resetButtonBounds(),
