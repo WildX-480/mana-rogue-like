@@ -130,6 +130,7 @@ function discoverRegion() {
 
 function unlockCharacter(id) {
   if (save.unlockedCharacters.includes(id)) return false;
+  if (!runStats.unlocked.includes(id)) runStats.unlocked.push(id);
   save.unlockedCharacters.push(id);
   persistSave();
   queueChapter(`character:${id}`, characterChapters[id]);
@@ -315,11 +316,12 @@ function serializeRun() {
     consumables,
     companions: companions.map(({ enemyCooldowns, ...companion }) => companion),
     storyLog,
+    runStats: { ...runStats, unlocked: [...runStats.unlocked] },
   };
 }
 
 function saveRunState() {
-  if (!character || !currentRoom || !['playing', 'paused'].includes(mode)) return;
+  if (!character || !currentRoom || deathTimer > 0 || !['playing', 'paused'].includes(mode)) return;
   try {
     localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(serializeRun()));
   } catch (error) {
@@ -445,6 +447,10 @@ function restoreRun() {
   consumables.push(...(saved.consumables || []));
   companions.length = 0;
   canvas.style.cursor = 'crosshair';
+  deathTimer = 0;
+  messageToasts.length = 0;
+  player.knockback = null;
+  resetRunStats(saved.runStats);
   mode = 'playing';
   showMap = false;
   showStoryJournal = false;

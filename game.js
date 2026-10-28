@@ -1,6 +1,9 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
+// Pixel-art sprites are drawn enlarged; nearest-neighbour keeps them sharp.
+ctx.imageSmoothingEnabled = false;
+
 // Auto quality: when frames run slow, glow (shadowBlur) is switched off and particles are capped.
 const quality = { low: false, avgMs: 16.7, slowFor: 0, fastFor: 0 };
 const nativeShadowBlur = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, 'shadowBlur');
@@ -543,6 +546,21 @@ let score = 0;
 let killStreak = 0;
 let killStreakTimer = 0;
 const streakCallout = { timer: 0, duration: 1.2, x: 0, y: 0, text: '' };
+// Counts down the slow-motion beat between the killing blow and the game-over screen.
+let deathTimer = 0;
+
+// Recent messages drawn on the canvas, newest first.
+const messageToasts = [];
+
+// Tallies for the end-of-run summary; saved with the run.
+const runStats = { seconds: 0, kills: 0, guardians: 0, zennyFound: 0, lastHitBy: '', unlocked: [] };
+
+// Ignores input briefly when a run ends so a held or mashed key can't skip the summary.
+let endScreenDelay = 0;
+
+// Second press of Descend within this window replaces a saved run.
+let newRunConfirmTimer = 0;
+
 let coins = 0;
 let keysHeld = 0;
 let bombsHeld = 3;
@@ -930,7 +948,7 @@ const rangeLensItemIds = ['range-lens', 'range-lens-ii', 'range-lens-iii'];
 
 
 function pauseGame() {
-  if (mode !== 'playing') return;
+  if (mode !== 'playing' || deathTimer > 0) return;
   for (const key of Object.keys(keys)) keys[key] = false;
   pointer.down = false;
   saveRunState();
@@ -954,6 +972,7 @@ function exitToTitle() {
   if (mode !== 'paused') return;
   saveRunState();
   mode = 'select';
+  menuFocus = defaultMenuFocus();
   messageTimer = 0;
   showMessage('Descent saved. Press R to resume or choose a new delver.', 5);
   updateHud();
@@ -1069,6 +1088,9 @@ function beginRun() {
   hitStopTimer = 0;
   hurtVignetteTimer = 0;
   player.knockback = null;
+  deathTimer = 0;
+  messageToasts.length = 0;
+  resetRunStats();
   killStreak = 0;
   killStreakTimer = 0;
   streakCallout.timer = 0;
@@ -1321,6 +1343,17 @@ function update(dt) {
     dt -= stoppedTime;
     if (dt <= 0) return;
   }
+  if (deathTimer > 0 && mode === 'playing') {
+    deathTimer = Math.max(0, deathTimer - dt);
+    if (deathTimer === 0) {
+      mode = 'gameover';
+      endScreenDelay = 0.6;
+      showMessage('The sanctum claims another delver. Choose who descends next.', 5);
+      updateHud();
+      return;
+    }
+    dt *= 0.3;
+  }
   elapsed += dt;
   if (cameraShake.remaining > 0) {
     cameraShake.remaining = Math.max(0, cameraShake.remaining - dt);
@@ -1328,6 +1361,7 @@ function update(dt) {
   }
   if (mode === 'playing') {
     save.playtimeSeconds += dt;
+    runStats.seconds += dt;
     unlockPlaytimeItems();
     profileSaveTimer += dt;
     if (profileSaveTimer >= 10) {
@@ -1339,6 +1373,10 @@ function update(dt) {
     killStreakTimer = Math.max(0, killStreakTimer - dt);
     if (killStreakTimer === 0) killStreak = 0;
     streakCallout.timer = Math.max(0, streakCallout.timer - dt);
+    for (let index = messageToasts.length - 1; index >= 0; index -= 1) {
+      messageToasts[index].timer -= dt;
+      if (messageToasts[index].timer <= 0) messageToasts.splice(index, 1);
+    }
     autosaveTimer += dt;
     if (autosaveTimer >= 12) {
       autosaveTimer = 0;
@@ -1358,10 +1396,12 @@ function update(dt) {
     if (lightningArcs[index].ttl <= 0) lightningArcs.splice(index, 1);
   }
 
-  const keyboardMoveX = (keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0);
-  const keyboardMoveY = (keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0);
-  const moveX = clamp(keyboardMoveX + gamepadInput.moveX + touchInput.moveX, -1, 1);
-  const moveY = clamp(keyboardMoveY + gamepadInput.moveY + touchInput.moveY, -1, 1);
+  // A fallen delver no longer responds to input.
+  const control = deathTimer > 0 ? 0 : 1;
+  const keyboardMoveX = ((keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0)) * control;
+  const keyboardMoveY = ((keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0)) * control;
+  const moveX = clamp(keyboardMoveX + (gamepadInput.moveX + touchInput.moveX) * control, -1, 1);
+  const moveY = clamp(keyboardMoveY + (gamepadInput.moveY + touchInput.moveY) * control, -1, 1);
   const keyboardLength = Math.hypot(keyboardMoveX, keyboardMoveY);
   const touchLength = Math.hypot(touchInput.moveX, touchInput.moveY);
   if (touchLength > 0 && !touchInput.attack) {
@@ -1436,10 +1476,13 @@ function update(dt) {
   playerStillTimer = Math.hypot(playerVelocity.x, playerVelocity.y) < 45 ? playerStillTimer + dt : 0;
   updateBossStrikes(dt);
   resolveDoorCrossing();
-  updateWalkInInteractions(dt);
+  if (control) updateWalkInInteractions(dt);
 
   const attackStyle = currentAttackStyle();
-  if (attackStyle === 'melee') updateMeleeInput(dt);
+  if (!control) {
+    player.meleeCharge = 0;
+    player.bowHold = 0;
+  } else if (attackStyle === 'melee') updateMeleeInput(dt);
   else if (attackStyle === 'bow') {
     player.meleeCharge = 0;
     updateBowInput(dt);
@@ -1677,7 +1720,10 @@ function update(dt) {
       }
       if (pickup.room) pickup.room.rewardClaimed = true;
     }
-    if (pickup.kind === 'coin') coins += 1;
+    if (pickup.kind === 'coin') {
+      coins += 1;
+      runStats.zennyFound += 1;
+    }
     if (pickup.kind === 'heart') {
       player.hp = Math.min(player.maxHp, player.hp + 1);
       popOverPlayer({ icon: 'heart', color: '#ff7b8e' });
@@ -1821,19 +1867,6 @@ let menhirPunIndex = 0;
 // Larger rooms are drawn larger on the maps; unvisited rooms stay a uniform size so they don't leak details.
 
 
-// Bottom-left 1/2/3 weapon slots; the active one is enlarged, glowing and tagged.
-// Bottom action bar: every non-weapon button, with its key, live count and cooldown.
-// Mirrors the page's text lines (message + controls hint) into the canvas so they are visible without scrolling.
-let commentaryText = '';
-let commentaryShownAt = 0;
-
-
-
-
-
-
-
-
 let resetConfirmTimer = 0;
 let menuFocus = 'start';
 let previousMenuVertical = 0;
@@ -1938,17 +1971,8 @@ function draw() {
   if (showStoryJournal) drawStoryJournal();
   if (mode === 'paused') drawPauseOverlay();
   if (showMap) drawMap();
-  if (mode === 'gameover') drawGameOver();
-  if (mode === 'won') {
-    ctx.fillStyle = 'rgba(10, 9, 14, 0.84)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#f1dec1';
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 38px Georgia';
-    ctx.fillText('THE MANA FLOWS AGAIN', canvas.width / 2, canvas.height / 2 - 18);
-    ctx.font = '18px Arial';
-    ctx.fillText('Press Enter to return to character selection', canvas.width / 2, canvas.height / 2 + 28);
-  }
+  if (mode === 'gameover') drawRunSummary('THE SANCTUM CLAIMS YOU');
+  if (mode === 'won') drawRunSummary('THE MANA FLOWS AGAIN');
 
   function drawPauseOverlay() {
     ctx.fillStyle = 'rgba(10, 9, 14, 0.82)';
@@ -1998,6 +2022,8 @@ function loop(timestamp) {
   lastTime = timestamp;
   if (document.visibilityState === 'visible') updateQuality(dt);
   resetConfirmTimer = Math.max(0, resetConfirmTimer - dt);
+  newRunConfirmTimer = Math.max(0, newRunConfirmTimer - dt);
+  endScreenDelay = Math.max(0, endScreenDelay - dt);
   if (chapterQueue.length > 0 && !activeChapter && (mode === 'select' ||
       (mode === 'playing' && enemies.length === 0 && !showMap && !showStoryJournal))) {
     openChapter();
@@ -2141,6 +2167,7 @@ function pollGamepad() {
     if (wasButtonPressed(5)) openCodex();
     if (wasButtonPressed(3)) openTutorial();
     if (wasButtonPressed(8)) openControls('select');
+    if (wasButtonPressed(4)) openPrologue();
   } else if (mode === 'tutorial') {
     if (wasButtonPressed(1) || wasButtonPressed(9)) closeTutorial();
     if (wasButtonPressed(0) || wasButtonPressed(5)) stepTutorial(1);
@@ -2163,11 +2190,7 @@ function pollGamepad() {
     }
     else if (wasButtonPressed(8)) openControls('paused');
   } else if (mode === 'gameover' || mode === 'won') {
-    if (wasButtonPressed(0) || wasButtonPressed(9)) {
-      mode = 'select';
-      selectedIndex = 0;
-      updateHud();
-    }
+    if (wasButtonPressed(0) || wasButtonPressed(9)) returnToCharacterSelect();
   } else if (mode === 'playing') {
     if (wasButtonPressed(9)) pauseGame();
     for (let button = 0; button < 16; button += 1) {
@@ -2187,6 +2210,7 @@ function pollGamepad() {
 }
 
 function runAction(id, options = {}) {
+  if (deathTimer > 0) return;
   if (id === 'interact') {
     interact(Boolean(options.shift));
     return;
@@ -2283,20 +2307,13 @@ window.addEventListener('keydown', (event) => {
     if (key === 'k') openCodex();
     if (key === 'h') openTutorial();
     if (key === 'c') openControls('select');
+    if (key === 'p') openPrologue();
     if (event.key === 'Delete') requestProgressReset();
-    if (event.key === 'Enter') beginRun();
+    if (event.key === 'Enter') requestNewRun();
     return;
   }
-  if (mode === 'gameover' && event.key === 'Enter') {
-    mode = 'select';
-    selectedIndex = 0;
-    updateHud();
-    return;
-  }
-  if (mode === 'won' && event.key === 'Enter') {
-    mode = 'select';
-    selectedIndex = 0;
-    updateHud();
+  if ((mode === 'gameover' || mode === 'won') && event.key === 'Enter') {
+    returnToCharacterSelect();
     return;
   }
   const keyAction = actionForKey(key);
@@ -2381,7 +2398,9 @@ function updatePointerPosition(event) {
     const codex = codexButtonBounds();
     const overCodex = pointer.x >= codex.x && pointer.x <= codex.x + codex.width &&
       pointer.y >= codex.y && pointer.y <= codex.y + codex.height;
-    canvas.style.cursor = overCard || overStart || overCodex ? 'pointer' : 'default';
+    const overButton = pointInBounds(prologueReplayBounds()) ||
+      [-1, 1].some((direction) => pointInBounds(rosterPageButtonBounds(direction)));
+    canvas.style.cursor = overCard || overStart || overCodex || overButton ? 'pointer' : 'default';
   } else {
     canvas.style.cursor = 'crosshair';
   }
@@ -2391,7 +2410,7 @@ canvas.addEventListener('pointermove', updatePointerPosition);
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 let lastWheelSwitch = 0;
 canvas.addEventListener('wheel', (event) => {
-  if (mode !== 'playing') return;
+  if (mode !== 'playing' || deathTimer > 0) return;
   event.preventDefault();
   const now = performance.now();
   if (now - lastWheelSwitch < 180 || event.deltaY === 0) return;
@@ -2466,10 +2485,24 @@ canvas.addEventListener('pointerdown', (event) => {
     else if (lineY >= 17 && lineY < 51) exitToTitle();
     return;
   }
+  if (mode === 'gameover' || mode === 'won') {
+    returnToCharacterSelect();
+    return;
+  }
   if (mode === 'select') {
     if (pointInBounds(helpButtonBounds())) {
       toggleControlsHelp();
       return;
+    }
+    if (pointInBounds(prologueReplayBounds())) {
+      openPrologue();
+      return;
+    }
+    for (const direction of [-1, 1]) {
+      if (pointInBounds(rosterPageButtonBounds(direction))) {
+        changeRosterPage(direction);
+        return;
+      }
     }
     const codex = codexButtonBounds();
     if (pointer.x >= codex.x && pointer.x <= codex.x + codex.width &&
@@ -2502,7 +2535,7 @@ canvas.addEventListener('pointerdown', (event) => {
     const start = characterStartBounds();
     if (pointer.x >= start.x && pointer.x <= start.x + start.width &&
       pointer.y >= start.y && pointer.y <= start.y + start.height) {
-      beginRun();
+      requestNewRun();
       return;
     }
     const pageStart = Math.floor(selectedIndex / rosterPageSize) * rosterPageSize;
@@ -2533,11 +2566,24 @@ canvas.addEventListener('lostpointercapture', () => {
   pointer.down = false;
 });
 
+// The prologue opens the game until it has been read once.
+if (save.introducedChapters.includes('prologue')) {
+  mode = 'select';
+  menuFocus = defaultMenuFocus();
+}
+
 updateHud();
-messageEl.textContent = hasSavedRun()
-  ? 'Read the prologue before choosing a delver or resuming your saved descent.'
-  : 'Read the prologue before choosing a delver.';
-startPrologueNarration();
+if (mode === 'prologue') {
+  messageEl.textContent = hasSavedRun()
+    ? 'Read the prologue before choosing a delver or resuming your saved descent.'
+    : 'Read the prologue before choosing a delver.';
+  startPrologueNarration();
+} else {
+  messageEl.textContent = hasSavedRun()
+    ? 'Resume your saved descent or choose a delver.'
+    : 'Choose a delver to begin the descent.';
+}
+
 window.addEventListener('pagehide', () => {
   persistSave();
   saveRunState();
