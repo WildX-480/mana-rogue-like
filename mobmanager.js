@@ -1510,7 +1510,6 @@ function damageEnemy(enemy, damage, impactX = player.x, impactY = player.y, igno
     addParticles(enemy.x, enemy.y - 10, '#fff6d8', enemy.boss ? 18 : 6, 120);
     runStats.kills += 1;
     if (enemy.boss) runStats.guardians += 1;
-    chargeStylesFromKill(enemy.boss ? 4 : enemy.miniBoss ? 2 : 1);
     onClassKill(enemy);
     killStreak = killStreakTimer > 0 ? killStreak + 1 : 1;
     killStreakTimer = 3.2;
